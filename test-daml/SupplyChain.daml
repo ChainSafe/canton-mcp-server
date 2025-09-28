@@ -1,0 +1,223 @@
+-- Supply chain and logistics patterns
+module SupplyChain where
+
+import Daml.Script
+
+template Product
+  with
+    id: Text
+    name: Text
+    manufacturer: Party
+    currentOwner: Party
+    location: Text
+    certifications: [Text]
+  where
+    signatory manufacturer, currentOwner
+    
+    ensure name /= ""
+    
+    agreement
+      "Product " <> name <> " (ID: " <> id <> ") is currently owned by " <> 
+      show currentOwner <> " and located at " <> location
+
+    choice TransferProduct : ContractId Product
+      with
+        newOwner: Party
+        newLocation: Text
+      controller currentOwner
+      do
+        create this with 
+          currentOwner = newOwner
+          location = newLocation
+
+    choice AddCertification : ContractId Product
+      with
+        certification: Text
+        certifier: Party
+      controller certifier
+      do
+        assertMsg "Manufacturer must authorize certification" (certifier == manufacturer)
+        create this with certifications = certification :: certifications
+
+template ShippingOrder
+  with
+    shipper: Party
+    carrier: Party
+    recipient: Party
+    productId: Text
+    origin: Text
+    destination: Text
+    estimatedDelivery: Text
+  where
+    signatory shipper
+    observer carrier, recipient
+    
+    choice AcceptShipping : ContractId ShippingInProgress
+      controller carrier
+      do
+        create ShippingInProgress with
+          shipper; carrier; recipient; productId; origin; destination; estimatedDelivery
+    
+    choice RejectShipping : ()
+      with
+        reason: Text
+      controller carrier
+      do
+        return ()
+
+template ShippingInProgress
+  with
+    shipper: Party
+    carrier: Party
+    recipient: Party
+    productId: Text
+    origin: Text
+    destination: Text
+    estimatedDelivery: Text
+  where
+    signatory shipper, carrier
+    observer recipient
+    
+    choice DeliverProduct : ContractId DeliveredProduct
+      with
+        actualDeliveryTime: Text
+        condition: Text
+      controller carrier
+      do
+        create DeliveredProduct with
+          shipper; carrier; recipient; productId; 
+          destination; actualDeliveryTime; condition
+    
+    choice ReportDelay : ContractId ShippingInProgress
+      with
+        newEstimatedDelivery: Text
+        reason: Text
+      controller carrier
+      do
+        create this with estimatedDelivery = newEstimatedDelivery
+
+template DeliveredProduct
+  with
+    shipper: Party
+    carrier: Party
+    recipient: Party
+    productId: Text
+    destination: Text
+    actualDeliveryTime: Text
+    condition: Text
+  where
+    signatory carrier
+    observer shipper, recipient
+    
+    choice ConfirmReceipt : ()
+      with
+        satisfactory: Bool
+        notes: Text
+      controller recipient
+      do
+        return ()
+
+-- Quality control template
+template QualityControl
+  with
+    inspector: Party
+    manufacturer: Party
+    productId: Text
+    inspectionStandards: [Text]
+  where
+    signatory inspector
+    observer manufacturer
+    
+    choice InspectProduct : ContractId QualityReport
+      with
+        testResults: [Text]
+        passed: Bool
+        notes: Text
+      controller inspector
+      do
+        create QualityReport with
+          inspector; manufacturer; productId; 
+          inspectionStandards; testResults; passed; notes
+
+template QualityReport
+  with
+    inspector: Party
+    manufacturer: Party
+    productId: Text
+    inspectionStandards: [Text]
+    testResults: [Text]
+    passed: Bool
+    notes: Text
+  where
+    signatory inspector
+    observer manufacturer
+    
+    choice AcknowledgeReport : ()
+      controller manufacturer
+      do
+        return ()
+
+-- Test comprehensive supply chain workflow
+test_supply_chain = script do
+  manufacturer <- allocateParty "AutoCorp"
+  distributor <- allocateParty "Distributor"
+  retailer <- allocateParty "Retailer"
+  carrier <- allocateParty "FastShip"
+  inspector <- allocateParty "QualityInspector"
+  
+  -- Create product
+  productId <- submit manufacturer do
+    createCmd Product with
+      id = "VIN123456"
+      name = "Electric Vehicle"
+      manufacturer = manufacturer
+      currentOwner = manufacturer
+      location = "Factory Floor"
+      certifications = ["ISO9001"]
+  
+  -- Quality inspection
+  qcId <- submit inspector do
+    createCmd QualityControl with
+      inspector = inspector
+      manufacturer = manufacturer
+      productId = "VIN123456"
+      inspectionStandards = ["Safety", "Performance", "Emissions"]
+  
+  reportId <- submit inspector do
+    exerciseCmd qcId InspectProduct with
+      testResults = ["Safety: PASS", "Performance: PASS", "Emissions: PASS"]
+      passed = True
+      notes = "All tests passed successfully"
+  
+  submit manufacturer do
+    exerciseCmd reportId AcknowledgeReport
+  
+  -- Transfer to distributor
+  productId2 <- submit manufacturer do
+    exerciseCmd productId TransferProduct with
+      newOwner = distributor
+      newLocation = "Distribution Center"
+  
+  -- Ship to retailer
+  shippingId <- submit distributor do
+    createCmd ShippingOrder with
+      shipper = distributor
+      carrier = carrier
+      recipient = retailer
+      productId = "VIN123456"
+      origin = "Distribution Center"
+      destination = "Retail Lot"
+      estimatedDelivery = "2024-02-15"
+  
+  inProgressId <- submit carrier do
+    exerciseCmd shippingId AcceptShipping
+  
+  deliveredId <- submit carrier do
+    exerciseCmd inProgressId DeliverProduct with
+      actualDeliveryTime = "2024-02-14"
+      condition = "Excellent"
+  
+  submit retailer do
+    exerciseCmd deliveredId ConfirmReceipt with
+      satisfactory = True
+      notes = "Product received in perfect condition"

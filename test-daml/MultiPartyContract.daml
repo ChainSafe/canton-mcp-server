@@ -1,0 +1,109 @@
+-- Multi-party authorization pattern
+module MultiPartyContract where
+
+import Daml.Script
+
+template MultiPartyAgreement
+  with
+    initiator: Party
+    approvers: [Party]
+    observers: [Party]
+    title: Text
+    terms: Text
+    requiredApprovals: Int
+  where
+    signatory initiator
+    observer approvers <> observers
+    
+    ensure requiredApprovals > 0 && requiredApprovals <= length approvers
+    
+    choice AddApproval : ContractId MultiPartyAgreement
+      with
+        approver: Party
+        approvals: [Party]
+      controller approver
+      do
+        assertMsg "Approver must be in approver list" (approver `elem` approvers)
+        assertMsg "Approver hasn't already approved" (approver `notElem` approvals)
+        
+        let newApprovals = approver :: approvals
+        
+        if length newApprovals >= requiredApprovals
+        then do
+          -- Agreement is fully approved
+          create ApprovedAgreement with
+            initiator
+            approvers = newApprovals
+            observers
+            title
+            terms
+        else do
+          -- Still need more approvals
+          create this with initiator; approvers; observers; title; terms; requiredApprovals
+
+template ApprovedAgreement
+  with
+    initiator: Party
+    approvers: [Party]
+    observers: [Party]
+    title: Text
+    terms: Text
+  where
+    signatory initiator :: approvers
+    observer observers
+    
+    agreement
+      "This agreement '" <> title <> "' has been approved by all required parties: " <> 
+      show approvers
+
+    choice Execute : ContractId ExecutedAgreement
+      controller initiator
+      do
+        create ExecutedAgreement with
+          initiator; approvers; observers; title; terms; executedAt = "Now"
+
+template ExecutedAgreement
+  with
+    initiator: Party
+    approvers: [Party]
+    observers: [Party]
+    title: Text
+    terms: Text
+    executedAt: Text
+  where
+    signatory initiator :: approvers
+    observer observers
+
+-- Test script for multi-party workflow
+test_multiparty = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+  charlie <- allocateParty "Charlie"
+  diana <- allocateParty "Diana"
+  regulator <- allocateParty "Regulator"
+  
+  -- Alice initiates agreement requiring 2 approvals
+  agreementId <- submit alice do
+    createCmd MultiPartyAgreement with
+      initiator = alice
+      approvers = [bob, charlie, diana]
+      observers = [regulator]
+      title = "Partnership Agreement"
+      terms = "Equal profit sharing among parties"
+      requiredApprovals = 2
+  
+  -- Bob approves
+  agreementId2 <- submit bob do
+    exerciseCmd agreementId AddApproval with
+      approver = bob
+      approvals = []
+  
+  -- Charlie approves (should trigger full approval)
+  approvedId <- submit charlie do
+    exerciseCmd agreementId2 AddApproval with
+      approver = charlie
+      approvals = [bob]
+  
+  -- Alice executes the approved agreement
+  submit alice do
+    exerciseCmd approvedId Execute

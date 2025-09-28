@@ -1,0 +1,123 @@
+-- Asset management with delegation pattern
+module AssetManagement where
+
+import Daml.Script
+
+template AssetOwnership
+  with
+    owner: Party
+    asset: Asset
+    custodian: Optional Party
+  where
+    signatory owner
+    observer [p | Some p <- [custodian]]
+    
+    choice TransferOwnership : ContractId AssetOwnership
+      with
+        newOwner: Party
+      controller owner
+      do
+        create this with owner = newOwner, custodian = None
+    
+    choice DelegateCustody : ContractId AssetOwnership
+      with
+        newCustodian: Party
+      controller owner
+      do
+        create this with custodian = Some newCustodian
+    
+    choice CustodianTransfer : ContractId AssetOwnership
+      with
+        newOwner: Party
+      controller [c | Some c <- [custodian]]
+      do
+        assertMsg "Only custodian can perform this transfer" (isSome custodian)
+        create this with owner = newOwner, custodian = None
+
+template AssetManager
+  with
+    manager: Party
+    client: Party
+    assets: [Text]
+    managementFee: Decimal
+  where
+    signatory manager, client
+    
+    choice AddAsset : ContractId AssetManager
+      with
+        newAsset: Text
+      controller client
+      do
+        create this with assets = newAsset :: assets
+    
+    choice ChargeManagementFee : ContractId FeePayment
+      with
+        period: Text
+      controller manager
+      do
+        create FeePayment with
+          payer = client
+          recipient = manager
+          amount = managementFee
+          description = "Management fee for " <> period
+
+template FeePayment
+  with
+    payer: Party
+    recipient: Party
+    amount: Decimal
+    description: Text
+  where
+    signatory payer
+    observer recipient
+    
+    choice AcceptPayment : ()
+      controller recipient
+      do
+        return ()
+
+data Asset = Asset
+  with
+    id: Text
+    assetType: Text
+    value: Decimal
+    currency: Text
+  deriving (Eq, Show)
+
+-- Test script
+test_asset_management = script do
+  alice <- allocateParty "Alice"
+  bank <- allocateParty "TrustBank"
+  assetManager <- allocateParty "AssetManager"
+  
+  let testAsset = Asset with
+        id = "STOCK001"
+        assetType = "Equity"
+        value = 10000.0
+        currency = "USD"
+  
+  -- Alice owns an asset
+  assetId <- submit alice do
+    createCmd AssetOwnership with
+      owner = alice
+      asset = testAsset
+      custodian = None
+  
+  -- Alice delegates custody to bank
+  assetId2 <- submit alice do
+    exerciseCmd assetId DelegateCustody with newCustodian = bank
+  
+  -- Alice engages asset manager
+  managementId <- submit alice do
+    createCmd AssetManager with
+      manager = assetManager
+      client = alice
+      assets = [testAsset.id]
+      managementFee = 100.0
+  
+  -- Asset manager charges fee
+  feeId <- submit assetManager do
+    exerciseCmd managementId ChargeManagementFee with period = "Q1 2024"
+  
+  submit assetManager do
+    exerciseCmd feeId AcceptPayment

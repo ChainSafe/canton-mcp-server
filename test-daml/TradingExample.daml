@@ -1,0 +1,263 @@
+-- Financial trading and settlement patterns
+module TradingExample where
+
+import Daml.Script
+
+data Currency = USD | EUR | GBP | JPY
+  deriving (Eq, Show)
+
+data Security = Security
+  with
+    symbol: Text
+    securityType: Text
+    issuer: Text
+  deriving (Eq, Show)
+
+template CashPosition
+  with
+    owner: Party
+    custodian: Party
+    amount: Decimal
+    currency: Currency
+  where
+    signatory owner, custodian
+    
+    ensure amount >= 0.0
+    
+    choice TransferCash : ContractId CashPosition
+      with
+        recipient: Party
+        transferAmount: Decimal
+      controller owner
+      do
+        assertMsg "Insufficient funds" (transferAmount <= amount)
+        assertMsg "Transfer amount must be positive" (transferAmount > 0.0)
+        
+        -- Create new position for recipient
+        recipientPos <- create CashPosition with
+          owner = recipient
+          custodian = custodian
+          amount = transferAmount
+          currency = currency
+        
+        -- Update sender's position
+        if transferAmount == amount
+        then return recipientPos  -- Full transfer, original position consumed
+        else do
+          create this with amount = amount - transferAmount
+          return recipientPos
+
+template SecurityPosition
+  with
+    owner: Party
+    custodian: Party
+    security: Security
+    quantity: Int
+  where
+    signatory owner, custodian
+    
+    ensure quantity >= 0
+    
+    choice TransferSecurity : ContractId SecurityPosition
+      with
+        recipient: Party
+        transferQuantity: Int
+      controller owner
+      do
+        assertMsg "Insufficient securities" (transferQuantity <= quantity)
+        assertMsg "Transfer quantity must be positive" (transferQuantity > 0)
+        
+        -- Create new position for recipient
+        recipientPos <- create SecurityPosition with
+          owner = recipient
+          custodian = custodian
+          security = security
+          quantity = transferQuantity
+        
+        -- Update sender's position
+        if transferQuantity == quantity
+        then return recipientPos
+        else do
+          create this with quantity = quantity - transferQuantity
+          return recipientPos
+
+template TradeOrder
+  with
+    trader: Party
+    broker: Party
+    security: Security
+    orderType: Text  -- "BUY" or "SELL"
+    quantity: Int
+    price: Decimal
+    currency: Currency
+  where
+    signatory trader
+    observer broker
+    
+    ensure quantity > 0
+    ensure price > 0.0
+    ensure orderType == "BUY" || orderType == "SELL"
+    
+    choice ExecuteTrade : ContractId ExecutedTrade
+      with
+        counterparty: Party
+        executionPrice: Decimal
+        executionTime: Text
+      controller broker
+      do
+        create ExecutedTrade with
+          buyer = if orderType == "BUY" then trader else counterparty
+          seller = if orderType == "SELL" then trader else counterparty
+          broker = broker
+          security = security
+          quantity = quantity
+          price = executionPrice
+          currency = currency
+          executionTime = executionTime
+    
+    choice CancelOrder : ()
+      controller trader
+      do
+        return ()
+
+template ExecutedTrade
+  with
+    buyer: Party
+    seller: Party
+    broker: Party
+    security: Security
+    quantity: Int
+    price: Decimal
+    currency: Currency
+    executionTime: Text
+  where
+    signatory buyer, seller, broker
+    
+    agreement
+      "Trade executed: " <> show quantity <> " shares of " <> security.symbol <>
+      " at " <> show price <> " " <> show currency <> " per share"
+    
+    choice SettleTrade : ()
+      with
+        buyerCashCid: ContractId CashPosition
+        sellerSecurityCid: ContractId SecurityPosition
+        clearingHouse: Party
+      controller clearingHouse
+      do
+        -- This choice would trigger the actual settlement
+        -- In a real implementation, this would:
+        -- 1. Fetch and validate positions
+        -- 2. Transfer securities from seller to buyer
+        -- 3. Transfer cash from buyer to seller
+        -- 4. Update positions accordingly
+        return ()
+
+template ClearingHouse
+  with
+    clearingHouse: Party
+    members: [Party]
+    riskManager: Party
+  where
+    signatory clearingHouse
+    observer members, riskManager
+    
+    choice AddMember : ContractId ClearingHouse
+      with
+        newMember: Party
+      controller clearingHouse
+      do
+        create this with members = newMember :: members
+    
+    choice CalculateRisk : ContractId RiskReport
+      with
+        member: Party
+        positions: [Text]  -- Simplified position data
+      controller riskManager
+      do
+        assertMsg "Member must be registered" (member `elem` members)
+        create RiskReport with
+          clearingHouse; riskManager; member; positions; riskLevel = "LOW"
+
+template RiskReport
+  with
+    clearingHouse: Party
+    riskManager: Party
+    member: Party
+    positions: [Text]
+    riskLevel: Text
+  where
+    signatory riskManager
+    observer clearingHouse, member
+
+-- Test trading workflow
+test_trading = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+  broker <- allocateParty "PrimeBroker"
+  custodian <- allocateParty "TrustCustodian"
+  clearingHouse <- allocateParty "ClearCorp"
+  riskManager <- allocateParty "RiskManager"
+  
+  let appleSecurity = Security with
+        symbol = "AAPL"
+        securityType = "Common Stock"
+        issuer = "Apple Inc."
+  
+  -- Alice has cash, Bob has securities
+  aliceCash <- submit alice do
+    createCmd CashPosition with
+      owner = alice
+      custodian = custodian
+      amount = 10000.0
+      currency = USD
+  
+  bobSecurities <- submit bob do
+    createCmd SecurityPosition with
+      owner = bob
+      custodian = custodian
+      security = appleSecurity
+      quantity = 100
+  
+  -- Alice places buy order
+  buyOrder <- submit alice do
+    createCmd TradeOrder with
+      trader = alice
+      broker = broker
+      security = appleSecurity
+      orderType = "BUY"
+      quantity = 50
+      price = 150.0
+      currency = USD
+  
+  -- Bob places sell order
+  sellOrder <- submit bob do
+    createCmd TradeOrder with
+      trader = bob
+      broker = broker
+      security = appleSecurity
+      orderType = "SELL"
+      quantity = 50
+      price = 150.0
+      currency = USD
+  
+  -- Broker matches orders and executes trade
+  executedTrade <- submit broker do
+    exerciseCmd buyOrder ExecuteTrade with
+      counterparty = bob
+      executionPrice = 150.0
+      executionTime = "2024-01-15T10:30:00Z"
+  
+  -- Set up clearing house
+  clearing <- submit clearingHouse do
+    createCmd ClearingHouse with
+      clearingHouse = clearingHouse
+      members = [alice, bob, broker]
+      riskManager = riskManager
+  
+  -- Risk assessment
+  riskReport <- submit riskManager do
+    exerciseCmd clearing CalculateRisk with
+      member = alice
+      positions = ["CASH: 10000 USD", "PENDING: 50 AAPL"]
+  
+  return ()

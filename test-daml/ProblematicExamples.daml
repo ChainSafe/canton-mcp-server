@@ -1,0 +1,132 @@
+-- Examples with authorization PROBLEMS for testing validator
+module ProblematicExamples where
+
+import Daml.Script
+
+-- PROBLEM 1: Missing signatory (should trigger critical error)
+template BadContractNoSignatory
+  with
+    party1: Party
+    party2: Party
+    data: Text
+  where
+    observer party1, party2  -- No signatory!
+    
+    choice DoSomething : ()
+      controller party1
+      do
+        return ()
+
+-- PROBLEM 2: Unauthorized controller (should trigger security issue)
+template BadContractUnauthorizedController
+  with
+    owner: Party
+    randomParty: Party
+    value: Decimal
+  where
+    signatory owner
+    
+    choice TransferValue : ()
+      controller randomParty  -- randomParty is not a signatory!
+      do
+        return ()
+
+-- PROBLEM 3: Information leakage through observers
+template BadContractTooManyObservers
+  with
+    owner: Party
+    secretData: Text
+  where
+    signatory owner
+    observer [  -- Way too many observers for private data
+      "Public",
+      "Regulator1", 
+      "Regulator2",
+      "Auditor1",
+      "Auditor2", 
+      "RandomParty"
+    ]
+
+-- PROBLEM 4: Missing essential validations
+template BadContractNoValidation
+  with
+    borrower: Party
+    lender: Party
+    amount: Decimal
+    interestRate: Decimal
+  where
+    signatory borrower, lender
+    -- Missing ensure clause - could have negative amounts or rates!
+    
+    choice Repay : ()
+      with
+        repaymentAmount: Decimal
+      controller borrower
+      do
+        -- No validation of repayment amount
+        return ()
+
+-- PROBLEM 5: Complex authorization anti-pattern
+template BadContractComplexAuth
+  with
+    manager: Party
+    employees: [Party]
+    data: Text
+  where
+    signatory manager
+    observer employees
+    
+    choice ApproveForEmployee : ()
+      with
+        employee: Party
+        action: Text
+      controller employee  -- Employee can approve for themselves!
+      do
+        assertMsg "Employee must be in list" (employee `elem` employees)
+        return ()
+
+-- PROBLEM 6: Missing agreement clause for important contract
+template BadContractNoAgreement
+  with
+    buyer: Party
+    seller: Party
+    asset: Text
+    price: Decimal
+  where
+    signatory buyer, seller
+    ensure price > 0.0
+    
+    -- Missing agreement clause for such an important contract!
+    
+    choice CompleteTransaction : ()
+      controller buyer, seller
+      do
+        return ()
+
+-- Test script that should fail in various ways
+test_problematic_examples = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+  charlie <- allocateParty "Charlie"
+  
+  -- This should fail - no signatory
+  -- badId1 <- submit alice do
+  --   createCmd BadContractNoSignatory with
+  --     party1 = alice
+  --     party2 = bob
+  --     data = "test"
+  
+  -- This might work but is a security issue
+  badId2 <- submit alice do
+    createCmd BadContractUnauthorizedController with
+      owner = alice
+      randomParty = bob
+      value = 100.0
+  
+  -- This will work but has privacy issues
+  badId3 <- submit alice do
+    createCmd BadContractTooManyObservers with
+      owner = alice
+      secretData = "Very secret information"
+  
+  return ()
