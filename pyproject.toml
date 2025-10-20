@@ -1,14 +1,18 @@
 [project]
 name = "canton-mcp-server"
 version = "0.1.0"
-description = "A FastMCP server for Canton blockchain development with DAML validation and authorization patterns"
+description = "MCP server for Canton blockchain development with DAML validation, authorization patterns, DCAP performance tracking, and x402 payments"
 readme = "README.md"
 authors = [
     { name = "empea-careercriminal", email = "empeamtk@googlemail.com" }
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "fastmcp>=2.12.4",
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+    "x402>=0.1.0",
+    "pydantic>=2.5.0",
+    "python-dotenv>=1.0.0",
 ]
 keywords = ["canton", "daml", "blockchain", "mcp", "digital-asset"]
 classifiers = [
