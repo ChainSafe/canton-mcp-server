@@ -1,0 +1,184 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Canton Pattern Resource Schema",
+  "description": "JSON Schema for Canton canonical pattern resources",
+  "type": "object",
+  "required": [
+    "name",
+    "version",
+    "description",
+    "tags",
+    "author",
+    "created_at",
+    "pattern_type",
+    "daml_template",
+    "authorization_requirements",
+    "when_to_use",
+    "when_not_to_use",
+    "security_considerations",
+    "test_cases"
+  ],
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Human-readable name of the pattern",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "version": {
+      "type": "string",
+      "description": "Semantic version of the pattern",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "description": {
+      "type": "string",
+      "description": "Detailed description of the pattern",
+      "minLength": 10
+    },
+    "tags": {
+      "type": "array",
+      "description": "Tags for categorization and search",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "author": {
+      "type": "string",
+      "description": "Author or organization that created the pattern",
+      "minLength": 1
+    },
+    "created_at": {
+      "type": "string",
+      "description": "ISO 8601 timestamp when pattern was created",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "description": "ISO 8601 timestamp when pattern was last updated",
+      "format": "date-time"
+    },
+    "security_level": {
+      "type": "string",
+      "description": "Security level of the pattern",
+      "enum": ["basic", "enhanced", "enterprise"]
+    },
+    "pattern_type": {
+      "type": "string",
+      "description": "Type of pattern (e.g., asset_transfer, approval_workflow)",
+      "minLength": 1
+    },
+    "daml_template": {
+      "type": "string",
+      "description": "DAML template code for the pattern",
+      "minLength": 10
+    },
+    "authorization_requirements": {
+      "type": "array",
+      "description": "List of authorization requirements and their verification",
+      "items": {
+        "type": "object",
+        "required": ["id", "rule", "satisfied", "explanation"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^REQ-AUTH-\\d{3}$"
+          },
+          "rule": {
+            "type": "string",
+            "minLength": 5
+          },
+          "satisfied": {
+            "type": "boolean"
+          },
+          "explanation": {
+            "type": "string",
+            "minLength": 5
+          }
+        }
+      },
+      "minItems": 1
+    },
+    "when_to_use": {
+      "type": "array",
+      "description": "Scenarios where this pattern should be used",
+      "items": {
+        "type": "string",
+        "minLength": 5
+      },
+      "minItems": 1
+    },
+    "when_not_to_use": {
+      "type": "array",
+      "description": "Scenarios where this pattern should NOT be used",
+      "items": {
+        "type": "string",
+        "minLength": 5
+      },
+      "minItems": 1
+    },
+    "related_patterns": {
+      "type": "array",
+      "description": "Related pattern names",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "security_considerations": {
+      "type": "array",
+      "description": "Security considerations when using this pattern",
+      "items": {
+        "type": "string",
+        "minLength": 5
+      },
+      "minItems": 1
+    },
+    "test_cases": {
+      "type": "array",
+      "description": "Test cases for the pattern",
+      "items": {
+        "type": "object",
+        "required": ["description", "passes", "code"],
+        "properties": {
+          "description": {
+            "type": "string",
+            "minLength": 5
+          },
+          "passes": {
+            "type": "boolean"
+          },
+          "expected_error": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "minItems": 1
+    },
+    "references": {
+      "type": "array",
+      "description": "External references and documentation",
+      "items": {
+        "type": "object",
+        "required": ["name", "url"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          }
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}
