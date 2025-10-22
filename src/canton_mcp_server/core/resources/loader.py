@@ -104,17 +104,26 @@ class ResourceLoader:
                                  'tags', 'author', 'created_at', 'updated_at']}
             
             # Create appropriate resource type
+            resource = None
             if category == ResourceCategory.PATTERN:
-                return PatternResource(name, metadata, content)
+                resource = PatternResource(name, metadata, content)
             elif category == ResourceCategory.ANTI_PATTERN:
-                return AntiPatternResource(name, metadata, content)
+                resource = AntiPatternResource(name, metadata, content)
             elif category == ResourceCategory.RULE:
-                return RuleResource(name, metadata, content)
+                resource = RuleResource(name, metadata, content)
             elif category == ResourceCategory.DOC:
-                return DocResource(name, metadata, content)
+                resource = DocResource(name, metadata, content)
             else:
                 logger.error(f"Unknown category: {category}")
                 return None
+            
+            # Validate the resource before returning
+            validation_errors = resource.validate()
+            if validation_errors:
+                logger.error(f"Resource validation failed for {file_path}: {validation_errors}")
+                return None
+            
+            return resource
                 
         except yaml.YAMLError as e:
             logger.error(f"YAML parsing error in {file_path}: {e}")
