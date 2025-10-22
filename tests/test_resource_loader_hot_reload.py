@@ -119,11 +119,30 @@ class TestResourceLoaderSingleFileReload:
             test_file = patterns_dir / "test-pattern.yaml"
             test_file.write_text("""
 name: test-pattern
-version: 1.0
+version: "1.0.0"
 description: Test pattern
 tags: [test]
+author: Test Author
+created_at: "2024-01-15T10:00:00Z"
 pattern_type: test
-content: test content
+daml_template: |
+  template Test
+    with
+      party: Party
+    where
+      signatory party
+authorization_requirements:
+  - id: REQ-AUTH-001
+    rule: Test rule
+    satisfied: true
+    explanation: Test explanation
+when_to_use: [Test scenarios]
+when_not_to_use: [Non-test scenarios]
+security_considerations: [Test security]
+test_cases:
+  - description: Test case
+    passes: true
+    code: test code
 """)
             
             # Create loader with fresh registry
@@ -139,18 +158,37 @@ content: test content
             # Modify file
             test_file.write_text("""
 name: test-pattern
-version: 1.0
+version: "1.0.0"
 description: Updated test pattern
 tags: [test]
+author: Test Author
+created_at: "2024-01-15T10:00:00Z"
 pattern_type: test
-content: updated content
+daml_template: |
+  template Test
+    with
+      party: Party
+    where
+      signatory party
+authorization_requirements:
+  - id: REQ-AUTH-001
+    rule: Test rule
+    satisfied: true
+    explanation: Test explanation
+when_to_use: [Test scenarios]
+when_not_to_use: [Non-test scenarios]
+security_considerations: [Test security]
+test_cases:
+  - description: Test case
+    passes: true
+    code: test code
 """)
             
             # Reload single file
             loader._reload_single_file(test_file)
             
             # Check that resource was updated
-            updated_resource = registry.get_resource("canton://canonical/patterns/test-pattern/v1.0")
+            updated_resource = registry.get_resource("canton://canonical/patterns/test-pattern/v1.0.0")
             assert updated_resource is not None
             assert updated_resource.metadata.description == "Updated test pattern"
     
@@ -165,11 +203,32 @@ content: updated content
             test_file = anti_patterns_dir / "test-anti-pattern.yaml"
             test_file.write_text("""
 name: test-anti-pattern
-version: 1.0
+version: "1.0.0"
 description: Test anti-pattern
 tags: [test]
+author: Test Author
+created_at: "2024-01-15T10:00:00Z"
 anti_pattern_type: test
 severity: high
+problematic_code: |
+  template Bad
+    with
+      party: Party
+    where
+      observer party
+why_problematic: This is problematic because...
+detection_pattern: [Pattern to detect]
+correct_alternative: |
+  template Good
+    with
+      party: Party
+    where
+      signatory party
+impact:
+  - type: correctness
+    severity: high
+    description: Test impact
+remediation: [Fix the issue]
 """)
             
             # Create loader with fresh registry
@@ -185,18 +244,39 @@ severity: high
             # Modify file
             test_file.write_text("""
 name: test-anti-pattern
-version: 1.0
+version: "1.0.0"
 description: Updated test anti-pattern
 tags: [test]
+author: Test Author
+created_at: "2024-01-15T10:00:00Z"
 anti_pattern_type: test
 severity: critical
+problematic_code: |
+  template Bad
+    with
+      party: Party
+    where
+      observer party
+why_problematic: This is problematic because...
+detection_pattern: [Pattern to detect]
+correct_alternative: |
+  template Good
+    with
+      party: Party
+    where
+      signatory party
+impact:
+  - type: correctness
+    severity: critical
+    description: Test impact
+remediation: [Fix the issue]
 """)
             
             # Reload single file
             loader._reload_single_file(test_file)
             
             # Check that resource was updated
-            updated_resource = registry.get_resource("canton://canonical/anti-patterns/test-anti-pattern/v1.0")
+            updated_resource = registry.get_resource("canton://canonical/anti-patterns/test-anti-pattern/v1.0.0")
             assert updated_resource is not None
             assert updated_resource.metadata.description == "Updated test anti-pattern"
     
@@ -209,7 +289,7 @@ severity: critical
             test_file = unknown_dir / "test.yaml"
             test_file.write_text("""
 name: test
-version: 1.0
+version: "1.0.0"
 description: Test
 """)
             
@@ -270,7 +350,7 @@ class TestResourceLoaderGlobalFunctions:
             test_file = patterns_dir / "test.yaml"
             test_file.write_text("""
 name: test
-version: 1.0
+version: "1.0.0"
 description: Test
 tags: [test]
 pattern_type: test
@@ -317,11 +397,30 @@ class TestResourceLoaderIntegration:
             test_file = patterns_dir / "workflow-test.yaml"
             test_file.write_text("""
 name: workflow-test
-version: 1.0
+version: "1.0.0"
 description: Initial description
 tags: [test]
+author: Test Author
+created_at: "2024-01-15T10:00:00Z"
 pattern_type: test
-content: initial content
+daml_template: |
+  template Test
+    with
+      party: Party
+    where
+      signatory party
+authorization_requirements:
+  - id: REQ-AUTH-001
+    rule: Test rule
+    satisfied: true
+    explanation: Test explanation
+when_to_use: [Test scenarios]
+when_not_to_use: [Non-test scenarios]
+security_considerations: [Test security]
+test_cases:
+  - description: Test case
+    passes: true
+    code: test code
 """)
             
             # Reset global loader
@@ -333,25 +432,44 @@ content: initial content
             loader.load_all_resources()
             
             # Check initial load
-            initial_resource = loader.registry.get_resource("canton://canonical/patterns/workflow-test/v1.0")
+            initial_resource = loader.registry.get_resource("canton://canonical/patterns/workflow-test/v1.0.0")
             assert initial_resource is not None
             assert initial_resource.metadata.description == "Initial description"
             
             # Modify file
             test_file.write_text("""
 name: workflow-test
-version: 1.0
+version: "1.0.0"
 description: Updated description
 tags: [test]
+author: Test Author
+created_at: "2024-01-15T10:00:00Z"
 pattern_type: test
-content: updated content
+daml_template: |
+  template Test
+    with
+      party: Party
+    where
+      signatory party
+authorization_requirements:
+  - id: REQ-AUTH-001
+    rule: Test rule
+    satisfied: true
+    explanation: Test explanation
+when_to_use: [Test scenarios]
+when_not_to_use: [Non-test scenarios]
+security_considerations: [Test security]
+test_cases:
+  - description: Test case
+    passes: true
+    code: test code
 """)
             
             # Simulate file change (normally done by file watcher)
             loader._reload_single_file(test_file)
             
             # Check updated resource
-            updated_resource = loader.registry.get_resource("canton://canonical/patterns/workflow-test/v1.0")
+            updated_resource = loader.registry.get_resource("canton://canonical/patterns/workflow-test/v1.0.0")
             assert updated_resource is not None
             assert updated_resource.metadata.description == "Updated description"
             

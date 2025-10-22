@@ -311,12 +311,31 @@ class TestResourceLoader:
         # Create temporary YAML file
         yaml_content = {
             "name": "test-pattern",
-            "version": "1.0",
+            "version": "1.0.0",
             "description": "Test pattern",
             "tags": ["test", "pattern"],
             "author": "Test Author",
+            "created_at": "2024-01-15T10:00:00Z",
             "pattern_type": "test",
-            "template": "template Test"
+            "daml_template": "template Test\n  with\n    party: Party\n  where\n    signatory party",
+            "authorization_requirements": [
+                {
+                    "id": "REQ-AUTH-001",
+                    "rule": "Test rule",
+                    "satisfied": True,
+                    "explanation": "Test explanation"
+                }
+            ],
+            "when_to_use": ["Test scenarios"],
+            "when_not_to_use": ["Non-test scenarios"],
+            "security_considerations": ["Test security"],
+            "test_cases": [
+                {
+                    "description": "Test case",
+                    "passes": True,
+                    "code": "test code"
+                }
+            ]
         }
         
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -340,7 +359,7 @@ class TestResourceLoader:
             
             resource = resources[0]
             assert resource.name == "test-pattern"
-            assert resource.metadata.version == "1.0"
+            assert resource.metadata.version == "1.0.0"
             assert resource.metadata.description == "Test pattern"
             assert resource.metadata.tags == ["test", "pattern"]
             assert resource.metadata.author == "Test Author"
@@ -376,7 +395,7 @@ class TestResourceLoader:
             
             # Create YAML missing name
             yaml_content = {
-                "version": "1.0",
+                "version": "1.0.0",
                 "tags": ["test"]
             }
             
