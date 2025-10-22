@@ -1,0 +1,191 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Canton Rule Resource Schema",
+  "description": "JSON Schema for Canton canonical rule resources",
+  "type": "object",
+  "required": [
+    "name",
+    "version",
+    "description",
+    "tags",
+    "author",
+    "created_at",
+    "rule_type",
+    "severity",
+    "enforcement",
+    "rules"
+  ],
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Human-readable name of the rule set",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "version": {
+      "type": "string",
+      "description": "Semantic version of the rule set",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "description": {
+      "type": "string",
+      "description": "Detailed description of the rule set",
+      "minLength": 10
+    },
+    "tags": {
+      "type": "array",
+      "description": "Tags for categorization and search",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "author": {
+      "type": "string",
+      "description": "Author or organization that created the rule set",
+      "minLength": 1
+    },
+    "created_at": {
+      "type": "string",
+      "description": "ISO 8601 timestamp when rule set was created",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "description": "ISO 8601 timestamp when rule set was last updated",
+      "format": "date-time"
+    },
+    "rule_type": {
+      "type": "string",
+      "description": "Type of rule set (e.g., authorization_invariant, safety_check)",
+      "minLength": 1
+    },
+    "severity": {
+      "type": "string",
+      "description": "Overall severity level of the rule set",
+      "enum": ["low", "medium", "high", "critical"]
+    },
+    "enforcement": {
+      "type": "string",
+      "description": "Enforcement level of the rule set",
+      "enum": ["advisory", "recommended", "mandatory"]
+    },
+    "rules": {
+      "type": "array",
+      "description": "Individual rules within the rule set",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "severity", "description", "validation"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Z]+-\\d{3}$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["low", "medium", "high", "critical"]
+          },
+          "description": {
+            "type": "string",
+            "minLength": 5
+          },
+          "validation": {
+            "type": "string",
+            "description": "Validation logic or pseudocode",
+            "minLength": 5
+          },
+          "category": {
+            "type": "string",
+            "description": "Category of the rule (e.g., authorization, safety, performance)"
+          }
+        }
+      },
+      "minItems": 1
+    },
+    "invariants": {
+      "type": "array",
+      "description": "Invariants that must be maintained",
+      "items": {
+        "type": "object",
+        "required": ["name", "description", "validation"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": {
+            "type": "string",
+            "minLength": 5
+          },
+          "validation": {
+            "type": "string",
+            "minLength": 5
+          }
+        }
+      }
+    },
+    "validation_checks": {
+      "type": "array",
+      "description": "Specific validation checks to perform",
+      "items": {
+        "type": "string",
+        "minLength": 5
+      }
+    },
+    "compliance_requirements": {
+      "type": "array",
+      "description": "Compliance requirements for the rules",
+      "items": {
+        "type": "string",
+        "minLength": 5
+      }
+    },
+    "exceptions": {
+      "type": "array",
+      "description": "Exceptions to the rules",
+      "items": {
+        "type": "object",
+        "required": ["rule_id", "condition", "justification"],
+        "properties": {
+          "rule_id": {
+            "type": "string",
+            "pattern": "^[A-Z]+-\\d{3}$"
+          },
+          "condition": {
+            "type": "string",
+            "minLength": 5
+          },
+          "justification": {
+            "type": "string",
+            "minLength": 5
+          }
+        }
+      }
+    },
+    "references": {
+      "type": "array",
+      "description": "External references and documentation",
+      "items": {
+        "type": "object",
+        "required": ["name", "url"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          }
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

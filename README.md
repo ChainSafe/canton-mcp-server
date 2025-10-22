@@ -152,6 +152,86 @@ Use these contracts to test the MCP tools:
 # Use MCP client to call suggest_authorization_pattern with supply chain requirements
 ```
 
+## Resource Schemas
+
+The Canton MCP Server uses JSON schemas to validate canonical resource files. All resource files must conform to their respective schemas:
+
+### Pattern Schema (`schemas/pattern.schema.json`)
+- **Required fields**: `name`, `version`, `description`, `tags`, `author`, `created_at`, `pattern_type`, `daml_template`, `authorization_requirements`, `when_to_use`, `when_not_to_use`, `security_considerations`, `test_cases`
+- **Version format**: Semantic versioning (e.g., "1.0.0")
+- **Date format**: ISO 8601 timestamps (e.g., "2024-01-15T10:00:00Z")
+
+### Anti-Pattern Schema (`schemas/anti-pattern.schema.json`)
+- **Required fields**: `name`, `version`, `description`, `tags`, `author`, `created_at`, `anti_pattern_type`, `severity`, `problematic_code`, `why_problematic`, `detection_pattern`, `correct_alternative`, `impact`, `remediation`
+- **Severity levels**: `low`, `medium`, `high`, `critical`
+
+### Rule Schema (`schemas/rule.schema.json`)
+- **Required fields**: `name`, `version`, `description`, `tags`, `author`, `created_at`, `rule_type`, `severity`, `enforcement`, `rules`
+- **Enforcement levels**: `advisory`, `recommended`, `mandatory`
+
+### Documentation Schema (`schemas/doc.schema.json`)
+- **Required fields**: `name`, `version`, `description`, `tags`, `author`, `created_at`, `doc_type`, `audience`, `difficulty`, `overview`, `sections`
+- **Document types**: `guide`, `tutorial`, `reference`, `best-practices`, `troubleshooting`, `api-docs`
+- **Audience levels**: `beginners`, `developers`, `architects`, `operators`, `all`
+
+### Schema Validation
+
+Resources are automatically validated against their schemas when loaded. Invalid resources are rejected with detailed error messages. The schema validation ensures:
+
+- **Data integrity**: All required fields are present
+- **Type safety**: Fields have correct data types
+- **Format compliance**: Dates, versions, and other fields follow proper formats
+- **Content quality**: Minimum length requirements for descriptions and other text fields
+
+### Example Valid Pattern Resource
+
+```yaml
+name: simple-transfer
+version: "1.0.0"
+description: Basic pattern for transferring ownership of an asset
+tags: [transfer, authorization, basic]
+author: Canton Team
+created_at: "2024-01-15T10:00:00Z"
+pattern_type: asset_transfer
+daml_template: |
+  template Transfer
+    with
+      owner: Party
+      asset: Asset
+    where
+      signatory owner
+      
+      choice TransferOwnership : ContractId Transfer
+        with
+          newOwner: Party
+        controller owner
+        do
+          create this with owner = newOwner
+
+authorization_requirements:
+  - id: REQ-AUTH-001
+    rule: "Controller must be signatory or have explicit authorization"
+    satisfied: true
+    explanation: "owner is signatory and controller"
+
+when_to_use:
+  - "Simple ownership transfers"
+  - "Unilateral actions by asset owner"
+
+when_not_to_use:
+  - "Multi-party approval needed"
+  - "Complex state transitions"
+
+security_considerations:
+  - "Ensure owner is signatory"
+  - "Validate asset state before transfer"
+
+test_cases:
+  - description: "Valid transfer"
+    passes: true
+    code: "alice transfers to bob"
+```
+
 ## MCP Integration
 
 This server follows the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) specification using HTTP+SSE transport.
