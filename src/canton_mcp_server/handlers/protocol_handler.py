@@ -49,6 +49,7 @@ async def handle_initialize(params: dict) -> dict:
         "serverInfo": {"name": "canton-mcp-server", "version": "0.1.0"},
         "capabilities": {
             "tools": {"listChanged": False},
+            "resources": {"subscribe": False, "listChanged": False},
             "logging": {},
         },
     }
@@ -151,18 +152,13 @@ def handle_resources_list() -> ListResourcesResult:
     """
     Handle resources/list request.
 
-    Returns list of available resources.
-    Currently returns empty list.
+    Returns list of available Canton canonical resources.
 
     Returns:
-        ListResourcesResult with empty resources list
-
-    TODO: Implement actual resources
-    - Trading data resources
-    - Strategy file resources
-    - Market data resources
+        ListResourcesResult with available resources
     """
-    return ListResourcesResult(resources=[])
+    from .resource_handler import handle_resources_list as _handle_resources_list
+    return _handle_resources_list()
 
 
 # =============================================================================

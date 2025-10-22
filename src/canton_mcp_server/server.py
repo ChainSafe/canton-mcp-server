@@ -38,6 +38,9 @@ from canton_mcp_server.handlers import (
     handle_tools_call,
     handle_tools_list,
 )
+from canton_mcp_server.handlers.resource_handler import (
+    handle_resources_read,
+)
 from canton_mcp_server.payment_handler import (
     PaymentConfigurationError,
     PaymentHandler,
@@ -69,6 +72,10 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting Canton MCP Server...")
 
+    # Load canonical resources
+    from canton_mcp_server.core.resources.loader import load_resources
+    load_resources()
+
     # Log registered tools
     registry = get_registry()
     logger.info(f"✅ Registered {len(registry)} tools:")
@@ -79,6 +86,15 @@ async def lifespan(app: FastAPI):
             else f"${tool.pricing.base_price}"
         )
         logger.info(f"   - {tool.name}: {tool.description[:60]}... ({pricing})")
+
+    # Log registered resources
+    from canton_mcp_server.core.resources.registry import get_registry as get_resource_registry
+    resource_registry = get_resource_registry()
+    stats = resource_registry.get_stats()
+    logger.info(f"✅ Loaded {stats['total']} canonical resources:")
+    for category, count in stats['by_category'].items():
+        if count > 0:
+            logger.info(f"   - {category}: {count} resources")
 
     yield
 
@@ -355,6 +371,24 @@ async def handle_mcp_request(request: Request):
                     mcp_request.id, result.resources
                 ).to_camel_dict()
             )
+        
+        elif method == "resources/read":
+            uri = params.get("uri")
+            if not uri:
+                return error_response(mcp_request.id, ErrorCodes.INVALID_PARAMS, "Missing resource URI")
+            
+            try:
+                result = handle_resources_read(uri)
+                return JSONResponse(
+                    content=ResourceResponse.read_success(
+                        mcp_request.id, result.contents
+                    ).to_camel_dict()
+                )
+            except ValueError as e:
+                return error_response(mcp_request.id, ErrorCodes.INVALID_PARAMS, str(e))
+            except Exception as e:
+                logger.error(f"Resource read error: {e}")
+                return error_response(mcp_request.id, ErrorCodes.INTERNAL_ERROR, "Failed to read resource")
 
         # Prompts
         elif method == "prompts/list":
