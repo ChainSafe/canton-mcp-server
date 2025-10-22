@@ -1,0 +1,43 @@
+name: missing-signatory
+version: 1.0
+description: PLACEHOLDER: Anti-pattern where required signatories are not properly defined
+author: Canton Team - PLACEHOLDER
+created_at: 2024-01-15
+updated_at: 2024-01-15
+tags:
+  - anti-pattern
+  - signatory
+  - authorization
+  - security
+  - placeholder
+
+anti_pattern_type: authorization_vulnerability
+severity: high
+description: |
+  This anti-pattern occurs when DAML contracts fail to properly define
+  all required signatories, leading to potential authorization bypasses.
+
+common_manifestations:
+  - Missing signatory declarations in template definitions
+  - Incomplete party lists in multi-party contracts
+  - Forgotten signatory requirements in choice controllers
+
+example_vulnerable_code: |
+  template VulnerableContract
+    with
+        asset: Asset
+        -- Missing: signatory asset.owner
+    where
+        -- Contract logic without proper signatory
+
+risks:
+  - Unauthorized contract creation
+  - Authorization bypass
+  - Asset theft or manipulation
+  - Compliance violations
+
+prevention_strategies:
+  - Always declare all required signatories
+  - Use static analysis tools
+  - Implement comprehensive testing
+  - Code review processes

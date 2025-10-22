@@ -1,0 +1,41 @@
+name: multi-party-approval
+version: 1.0
+description: PLACEHOLDER: Pattern for multi-party approval workflows in DAML contracts
+author: Canton Team - PLACEHOLDER
+created_at: 2024-01-15
+updated_at: 2024-01-15
+tags:
+  - approval
+  - multi-party
+  - workflow
+  - authorization
+  - placeholder
+
+pattern_type: approval_workflow
+contract_template: |
+  template MultiPartyApproval
+    with
+        parties: [Party]
+        required_approvals: Int
+        asset: Asset
+    where
+        signatory parties
+        observer asset.owner
+        
+        choice Approve
+          : ContractId MultiPartyApproval
+          controller party: Party
+          do
+            -- Implementation for approval logic
+            create this with parties = parties, required_approvals = required_approvals - 1
+
+use_cases:
+  - Multi-signature wallets
+  - Corporate governance decisions
+  - Asset transfer approvals
+  - Compliance workflows
+
+implementation_notes:
+  - Ensure proper party management
+  - Handle edge cases for approval thresholds
+  - Consider timeout mechanisms

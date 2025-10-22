@@ -1,12 +1,13 @@
 name: simple-transfer
 version: "1.0"
 category: patterns
-description: "Simple asset transfer pattern with single signatory"
+description: "PLACEHOLDER: Simple asset transfer pattern with single signatory - UPDATED VIA HOT-RELOAD"
 tags:
   - transfer
   - asset
   - simple
-author: "Canton MCP Server"
+  - placeholder
+author: "Canton MCP Server - PLACEHOLDER"
 created_at: "2025-01-15T10:00:00Z"
 
 content:
