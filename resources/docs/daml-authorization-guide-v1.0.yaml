@@ -1,0 +1,56 @@
+name: daml-authorization-guide
+version: 1.0
+description: PLACEHOLDER: Comprehensive guide to DAML authorization patterns and best practices
+author: Canton Team - PLACEHOLDER
+created_at: 2024-01-15
+updated_at: 2024-01-15
+tags:
+  - documentation
+  - authorization
+  - daml
+  - guide
+  - best-practices
+  - placeholder
+
+doc_type: guide
+audience: developers
+difficulty: intermediate
+
+overview: |
+  This guide provides comprehensive coverage of DAML authorization patterns,
+  from basic concepts to advanced multi-party scenarios.
+
+sections:
+  - title: "Introduction to DAML Authorization"
+    content: |
+      DAML authorization is based on the principle that only signatories
+      can create contracts and only controllers can exercise choices.
+      
+  - title: "Basic Authorization Patterns"
+    content: |
+      Learn the fundamental patterns for single-party and multi-party
+      authorization scenarios.
+      
+  - title: "Advanced Authorization Techniques"
+    content: |
+      Explore delegation, conditional authorization, and complex
+      multi-party workflows.
+      
+  - title: "Common Pitfalls and Anti-Patterns"
+    content: |
+      Understand common mistakes and how to avoid them.
+
+examples:
+  - title: "Simple Asset Transfer"
+    description: "Basic asset ownership transfer pattern"
+    
+  - title: "Multi-Party Approval"
+    description: "Complex approval workflow with multiple parties"
+    
+  - title: "Delegation Pattern"
+    description: "How to implement delegation of authority"
+
+references:
+  - "DAML Documentation: https://docs.daml.com"
+  - "Canton Documentation: https://docs.canton.io"
+  - "Authorization Best Practices: [Internal Link]"

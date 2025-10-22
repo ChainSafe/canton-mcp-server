@@ -13,6 +13,8 @@ dependencies = [
     "x402>=0.1.0",
     "pydantic>=2.5.0",
     "python-dotenv>=1.0.0",
+    "watchdog>=4.0.0",
+    "pyyaml>=6.0.0",
 ]
 keywords = ["canton", "daml", "blockchain", "mcp", "digital-asset"]
 classifiers = [

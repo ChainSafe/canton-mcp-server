@@ -1,0 +1,47 @@
+name: authorization-invariants
+version: 1.0
+description: PLACEHOLDER: Core authorization invariants that must be maintained in DAML contracts
+author: Canton Team - PLACEHOLDER
+created_at: 2024-01-15
+updated_at: 2024-01-15
+tags:
+  - rule
+  - authorization
+  - invariant
+  - security
+  - validation
+  - placeholder
+
+rule_type: authorization_invariant
+severity: critical
+enforcement: mandatory
+
+invariants:
+  - name: signatory_consistency
+    description: All signatories must be explicitly declared
+    validation: |
+      Every template must have a complete signatory clause
+      that includes all parties with authority over the contract
+    
+  - name: controller_authority
+    description: Choice controllers must have proper authorization
+    validation: |
+      Choice controllers must be signatories or explicitly authorized
+      by the contract's authorization logic
+    
+  - name: asset_ownership
+    description: Asset ownership must be properly maintained
+    validation: |
+      Asset ownership transfers must maintain proper authorization
+      and cannot bypass existing ownership rights
+
+validation_checks:
+  - Static analysis of signatory declarations
+  - Runtime authorization verification
+  - Asset ownership consistency checks
+  - Controller authority validation
+
+compliance_requirements:
+  - All contracts must pass authorization invariant checks
+  - Violations must be caught at compile time when possible
+  - Runtime violations must trigger proper error handling

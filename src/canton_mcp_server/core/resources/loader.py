@@ -7,9 +7,13 @@ Supports hot-reloading during development.
 
 import logging
 import os
+import threading
+import time
 import yaml
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from watchdog.events import FileSystemEventHandler
+from watchdog.observers import Observer
 
 from .base import (
     AntiPatternResource,
@@ -24,12 +28,49 @@ from .registry import get_registry
 logger = logging.getLogger(__name__)
 
 
-class ResourceLoader:
-    """Loads resources from YAML files"""
+class ResourceFileHandler(FileSystemEventHandler):
+    """Handles file system events for resource hot-reloading"""
     
-    def __init__(self, resources_dir: str = "resources"):
+    def __init__(self, loader: 'ResourceLoader'):
+        self.loader = loader
+        self.last_reload = 0
+        self.reload_delay = 1.0  # Debounce reloads by 1 second
+    
+    def on_modified(self, event):
+        """Handle file modification events"""
+        if event.is_directory:
+            return
+        
+        # Only handle YAML files
+        if not (event.src_path.endswith('.yaml') or event.src_path.endswith('.yml')):
+            return
+        
+        # Debounce rapid file changes
+        current_time = time.time()
+        if current_time - self.last_reload < self.reload_delay:
+            return
+        
+        self.last_reload = current_time
+        
+        # Reload the specific file
+        file_path = Path(event.src_path)
+        logger.info(f"Resource file changed: {file_path}")
+        
+        try:
+            self.loader._reload_single_file(file_path)
+        except Exception as e:
+            logger.error(f"Failed to reload {file_path}: {e}")
+
+
+class ResourceLoader:
+    """Loads resources from YAML files with hot-reloading support"""
+    
+    def __init__(self, resources_dir: str = "resources", enable_hot_reload: bool = False):
         self.resources_dir = Path(resources_dir)
         self.registry = get_registry()
+        self.enable_hot_reload = enable_hot_reload
+        self.observer: Optional[Observer] = None
+        self._file_timestamps: Dict[str, float] = {}
     
     def load_all_resources(self) -> None:
         """Load all resources from the resources directory"""
@@ -45,6 +86,10 @@ class ResourceLoader:
         
         stats = self.registry.get_stats()
         logger.info(f"Loaded {stats['total']} resources")
+        
+        # Start file watcher if hot-reload is enabled
+        if self.enable_hot_reload:
+            self._start_file_watcher()
     
     def _load_category_resources(self, category: ResourceCategory, dir_name: str) -> None:
         """Load resources from a specific category directory"""
@@ -142,25 +187,110 @@ class ResourceLoader:
         
         # Reload from files
         self.load_all_resources()
+    
+    def _start_file_watcher(self) -> None:
+        """Start the file system watcher for hot-reloading"""
+        if self.observer is not None:
+            return  # Already started
+        
+        try:
+            self.observer = Observer()
+            event_handler = ResourceFileHandler(self)
+            
+            # Watch the entire resources directory
+            self.observer.schedule(event_handler, str(self.resources_dir), recursive=True)
+            self.observer.start()
+            
+            logger.info(f"Started file watcher for hot-reloading: {self.resources_dir}")
+        except Exception as e:
+            logger.error(f"Failed to start file watcher: {e}")
+            self.observer = None
+    
+    def stop_file_watcher(self) -> None:
+        """Stop the file system watcher"""
+        if self.observer is not None:
+            self.observer.stop()
+            self.observer.join()
+            self.observer = None
+            logger.info("Stopped file watcher")
+    
+    def _reload_single_file(self, file_path: Path) -> None:
+        """Reload a single resource file"""
+        # Determine category from file path
+        category = None
+        category_name = None
+        
+        for parent in file_path.parents:
+            if parent.name == "patterns":
+                category = ResourceCategory.PATTERN
+                category_name = "patterns"
+                break
+            elif parent.name == "anti-patterns":
+                category = ResourceCategory.ANTI_PATTERN
+                category_name = "anti-patterns"
+                break
+            elif parent.name == "rules":
+                category = ResourceCategory.RULE
+                category_name = "rules"
+                break
+            elif parent.name == "docs":
+                category = ResourceCategory.DOC
+                category_name = "docs"
+                break
+        
+        if category is None:
+            logger.warning(f"Could not determine category for file: {file_path}")
+            return
+        
+        # Find and unregister existing resource with same name
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = yaml.safe_load(f)
+            
+            if data and 'name' in data:
+                resource_name = data['name']
+                uri = f"canton://canonical/{category_name}/{resource_name}/v{data.get('version', '1.0')}"
+                
+                # Unregister existing resource
+                if self.registry.get_resource(uri):
+                    self.registry.unregister(uri)
+                    logger.info(f"Unregistered existing resource: {uri}")
+                
+                # Load new resource
+                resource = self._load_resource_file(file_path, category)
+                if resource:
+                    self.registry.register(resource)
+                    logger.info(f"Reloaded resource: {uri}")
+                else:
+                    logger.error(f"Failed to reload resource: {file_path}")
+        
+        except Exception as e:
+            logger.error(f"Error reloading single file {file_path}: {e}")
 
 
 # Global loader instance
 _loader: Optional[ResourceLoader] = None
 
 
-def get_loader() -> ResourceLoader:
+def get_loader(enable_hot_reload: bool = False) -> ResourceLoader:
     """Get the global resource loader instance"""
     global _loader
     if _loader is None:
-        _loader = ResourceLoader()
+        _loader = ResourceLoader(enable_hot_reload=enable_hot_reload)
     return _loader
 
 
-def load_resources() -> None:
+def load_resources(enable_hot_reload: bool = False) -> None:
     """Load all resources using the global loader"""
-    get_loader().load_all_resources()
+    get_loader(enable_hot_reload).load_all_resources()
 
 
 def reload_resources() -> None:
     """Reload all resources using the global loader"""
     get_loader().reload_resources()
+
+
+def stop_hot_reload() -> None:
+    """Stop hot-reloading file watcher"""
+    loader = get_loader()
+    loader.stop_file_watcher()

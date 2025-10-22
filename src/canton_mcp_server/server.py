@@ -72,9 +72,16 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting Canton MCP Server...")
 
+    # Check if we're in development mode (hot-reload enabled)
+    import os
+    enable_hot_reload = os.getenv("CANTON_HOT_RELOAD", "false").lower() == "true"
+    
     # Load canonical resources
     from canton_mcp_server.core.resources.loader import load_resources
-    load_resources()
+    load_resources(enable_hot_reload=enable_hot_reload)
+    
+    if enable_hot_reload:
+        logger.info("🔥 Hot-reload enabled for resource files")
 
     # Log registered tools
     registry = get_registry()
@@ -100,6 +107,12 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     logger.info("Shutting down...")
+    
+    # Stop hot-reload file watcher if enabled
+    if enable_hot_reload:
+        from canton_mcp_server.core.resources.loader import stop_hot_reload
+        stop_hot_reload()
+        logger.info("🔥 Stopped hot-reload file watcher")
 
 
 # =============================================================================
