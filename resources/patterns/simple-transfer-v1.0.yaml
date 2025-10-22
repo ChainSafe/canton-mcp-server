@@ -1,0 +1,35 @@
+name: simple-transfer
+version: "1.0"
+category: patterns
+description: "Simple asset transfer pattern with single signatory"
+tags:
+  - transfer
+  - asset
+  - simple
+author: "Canton MCP Server"
+created_at: "2025-01-15T10:00:00Z"
+
+content:
+  pattern_type: "asset_transfer"
+  signatories:
+    - "sender"
+    - "receiver"
+  observers:
+    - "auditor"
+  
+  template: |
+    template SimpleTransfer
+      with
+        sender: Party
+        receiver: Party
+        asset: ContractId Asset
+      where
+        signatory sender
+        observer receiver
+      choice Transfer: ContractId SimpleTransfer
+        controller sender
+        do
+          create SimpleTransfer with
+            sender = receiver
+            receiver = sender
+            asset = asset

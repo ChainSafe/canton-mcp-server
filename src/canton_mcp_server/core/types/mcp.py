@@ -381,6 +381,18 @@ class ListResourcesResult(SerializableMixin):
     _meta: Optional[Dict[str, Any]] = None
 
 
+@dataclass
+class ReadResourceResult(SerializableMixin):
+    """
+    Result of resources/read request.
+
+    Per MCP spec: https://modelcontextprotocol.io/specification/2025-06-18/schema#readresourceresult
+    """
+
+    contents: List[ResourceContents]
+    _meta: Optional[Dict[str, Any]] = None
+
+
 # =============================================================================
 # Notification Types (per MCP specification)
 # =============================================================================
