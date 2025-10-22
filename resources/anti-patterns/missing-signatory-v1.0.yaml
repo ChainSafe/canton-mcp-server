@@ -1,43 +1,71 @@
 name: missing-signatory
-version: 1.0
-description: PLACEHOLDER: Anti-pattern where required signatories are not properly defined
-author: Canton Team - PLACEHOLDER
-created_at: 2024-01-15
-updated_at: 2024-01-15
+version: "1.0.0"
+description: "Critical anti-pattern where DAML templates lack proper signatory declarations"
 tags:
   - anti-pattern
   - signatory
   - authorization
   - security
-  - placeholder
+  - critical
+author: "Digital Asset"
+created_at: "2024-01-15T10:00:00Z"
+updated_at: "2024-01-15T10:00:00Z"
 
 anti_pattern_type: authorization_vulnerability
-severity: high
-description: |
-  This anti-pattern occurs when DAML contracts fail to properly define
-  all required signatories, leading to potential authorization bypasses.
-
-common_manifestations:
-  - Missing signatory declarations in template definitions
-  - Incomplete party lists in multi-party contracts
-  - Forgotten signatory requirements in choice controllers
-
-example_vulnerable_code: |
+severity: critical
+problematic_code: |
   template VulnerableContract
     with
-        asset: Asset
-        -- Missing: signatory asset.owner
+      asset: Asset
+      -- Missing: signatory asset.owner
     where
-        -- Contract logic without proper signatory
+      -- Contract logic without proper signatory
+      choice Transfer : ContractId VulnerableContract
+        with
+          newOwner: Party
+        controller asset.owner
+        do
+          create this with asset = asset
 
-risks:
-  - Unauthorized contract creation
-  - Authorization bypass
-  - Asset theft or manipulation
-  - Compliance violations
+why_problematic: |
+  This anti-pattern occurs when DAML contracts fail to properly define
+  all required signatories, leading to potential authorization bypasses.
+  Without proper signatory declarations, contracts can be created or
+  modified by unauthorized parties, violating DAML's authorization model.
 
-prevention_strategies:
-  - Always declare all required signatories
-  - Use static analysis tools
-  - Implement comprehensive testing
-  - Code review processes
+detection_pattern:
+  - "Template definitions without signatory clauses"
+  - "Choices with controllers not in signatory list"
+  - "Multi-party contracts with incomplete signatory declarations"
+  - "Missing signatory declarations in template definitions"
+
+correct_alternative: |
+  template SecureContract
+    with
+      asset: Asset
+    where
+      signatory asset.owner  -- Properly declared signatory
+      choice Transfer : ContractId SecureContract
+        with
+          newOwner: Party
+        controller asset.owner
+        do
+          create this with asset = asset
+
+impact:
+  - type: security
+    severity: critical
+    description: "Unauthorized contract creation and modification"
+  - type: correctness
+    severity: high
+    description: "Authorization bypass leading to asset manipulation"
+  - type: compliance
+    severity: high
+    description: "Violation of DAML authorization model"
+
+remediation:
+  - "Add proper signatory declarations to all templates"
+  - "Ensure all choice controllers are signatories or have explicit authorization"
+  - "Use static analysis tools to detect missing signatories"
+  - "Implement comprehensive testing for authorization scenarios"
+  - "Review all template definitions for complete signatory coverage"
