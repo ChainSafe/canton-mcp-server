@@ -383,3 +383,56 @@ class DirectFileResourceLoader:
             logger.warning(f"Git verification found {total_errors} errors")
         
         return verification_results
+    
+    def get_structured_resources(self) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Get resources structured by use case and complexity.
+        
+        Returns:
+            Dictionary mapping use cases to structured resources
+        """
+        from .structured_ingestion import StructuredIngestionEngine
+        
+        # Get raw resources
+        raw_resources = self.get_all_resources()
+        
+        # Structure them
+        ingestion_engine = StructuredIngestionEngine()
+        structured_resources = ingestion_engine.ingest_resources(raw_resources)
+        
+        # Convert StructuredResource objects to dictionaries for JSON serialization
+        result = {}
+        for use_case, resources in structured_resources.items():
+            result[use_case] = []
+            for resource in resources:
+                result[use_case].append({
+                    "name": resource.name,
+                    "file_path": resource.file_path,
+                    "content": resource.content,
+                    "file_type": resource.file_type,
+                    "use_cases": resource.use_cases,
+                    "security_level": resource.security_level.value,
+                    "complexity_level": resource.complexity_level.value,
+                    "keywords": resource.keywords,
+                    "related_patterns": resource.related_patterns,
+                    "canonical_hash": resource.canonical_hash,
+                    "source_repo": resource.source_repo,
+                    "source_commit": resource.source_commit
+                })
+        
+        return result
+    
+    def get_all_resources(self) -> List[Dict[str, Any]]:
+        """
+        Get all resources as a flat list.
+        
+        Returns:
+            List of all resource dictionaries
+        """
+        all_resources = []
+        structured_resources = self.scan_repositories()
+        
+        for resource_type, resources in structured_resources.items():
+            all_resources.extend(resources)
+        
+        return all_resources
