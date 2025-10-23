@@ -42,6 +42,10 @@ class DirectFileResourceLoader:
             "daml-finance": canonical_docs_path / "daml-finance"
         }
         
+        # Cache for scanned resources
+        self._cached_resources: Dict[str, List[Dict[str, Any]]] = {}
+        self._cache_timestamp: Optional[datetime] = None
+        
         # Allowed documentation file extensions
         self.doc_extensions = {
             ".md",      # Markdown files
@@ -56,14 +60,31 @@ class DirectFileResourceLoader:
         self.build_extensions = {
             ".py", ".js", ".css", ".html", ".conf", ".ini", ".toml", ".lock", ".log"
         }
+        
+        # Binary file extensions (filter out)
+        self.binary_extensions = {
+            ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico",  # Images
+            ".pdf", ".zip", ".tar", ".gz", ".rar",            # Archives
+            ".exe", ".dll", ".so", ".dylib",                   # Binaries
+            ".dar", ".jar", ".war", ".ear",                    # Java archives
+            ".class", ".o", ".obj", ".a",                      # Compiled files
+        }
     
-    def scan_repositories(self) -> Dict[str, List[Dict[str, Any]]]:
+    def scan_repositories(self, force_refresh: bool = False) -> Dict[str, List[Dict[str, Any]]]:
         """
         Scan all cloned repositories for documentation files.
+        
+        Args:
+            force_refresh: If True, bypass cache and rescan all repositories
         
         Returns:
             Dictionary mapping resource types to lists of file resources
         """
+        # Return cached results if available and not forcing refresh
+        if not force_refresh and self._cached_resources and self._cache_timestamp:
+            logger.debug("Returning cached repository scan results")
+            return self._cached_resources
+        
         logger.info("Scanning cloned repositories for documentation files...")
         
         resources = {
@@ -88,6 +109,10 @@ class DirectFileResourceLoader:
         
         total_resources = sum(len(resource_list) for resource_list in resources.values())
         logger.info(f"Found {total_resources} documentation files across all repositories")
+        
+        # Cache the results
+        self._cached_resources = resources
+        self._cache_timestamp = datetime.utcnow()
         
         return resources
     
@@ -144,6 +169,10 @@ class DirectFileResourceLoader:
         
         # Reject build file extensions
         if file_ext in self.build_extensions:
+            return False
+        
+        # Reject binary file extensions
+        if file_ext in self.binary_extensions:
             return False
         
         # Special cases for files without extensions
