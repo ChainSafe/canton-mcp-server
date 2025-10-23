@@ -34,7 +34,7 @@ def get_direct_loader() -> DirectFileResourceLoader:
     
     if _direct_loader is None:
         # Initialize with canonical docs path (relative to project root)
-        canonical_docs_path = Path("../../canonical-daml-docs")  # Go up from src/canton_mcp_server/ to project root
+        canonical_docs_path = Path("../../../canonical-daml-docs")  # Go up from src/canton_mcp_server/ to project root
         _direct_loader = DirectFileResourceLoader(canonical_docs_path)
     
     return _direct_loader
