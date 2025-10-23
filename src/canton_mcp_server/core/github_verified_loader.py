@@ -73,7 +73,7 @@ class GitHubVerifiedResourceLoader:
             try:
                 # Determine resource type from file path for schema validation
                 resource_type = self._get_resource_type_from_path(file_path)
-                self.validator.validate_resource(resource, file_path, resource_type)
+                self.validator.validate_resource(resource, resource_type)
                 logger.debug(f"GATE 2 PASSED - Schema validation successful for {file_path}")
             except SchemaValidationError as e:
                 logger.error(f"GATE 2 FAILED - Schema validation failed for {file_path}: {e}")
