@@ -7,6 +7,7 @@ in favor of cryptographic verification.
 
 import yaml
 import logging
+import subprocess
 from typing import Dict, List, Any, Optional
 from pathlib import Path
 
@@ -33,6 +34,37 @@ class GitVerifiedResourceLoader:
         self.canonical_docs_path = canonical_docs_path
         self.validator = get_validator()
         self._resources: Dict[str, Any] = {}
+        
+        # Official repository whitelist for security
+        self.official_repos = {
+            "daml": {
+                "path": canonical_docs_path / "daml",
+                "allowed_paths": [
+                    "sdk/",
+                    "docs/",
+                    "README.md",
+                    "LICENSE",
+                    "CONTRIBUTING.md"
+                ]
+            },
+            "canton": {
+                "path": canonical_docs_path / "canton", 
+                "allowed_paths": [
+                    "canton/",
+                    "docs/",
+                    "README.md",
+                    "LICENSE"
+                ]
+            },
+            "daml-finance": {
+                "path": canonical_docs_path / "daml-finance",
+                "allowed_paths": [
+                    "docs/generated/",
+                    "README.md",
+                    "LICENSE"
+                ]
+            }
+        }
     
     def load_resource_file(self, file_path: Path) -> Optional[Dict[str, Any]]:
         """
@@ -113,24 +145,87 @@ class GitVerifiedResourceLoader:
     
     def _get_repo_path(self, source_file: str) -> Optional[Path]:
         """
-        Determine which canonical repository a file comes from.
+        Determine which official canonical repository a file comes from.
+        Uses whitelist-based security to prevent unauthorized access.
         
         Args:
             source_file: Path to the source file
             
         Returns:
-            Path to the repository or None if unknown
+            Path to the official repository or None if not allowed
         """
-        # Simple heuristic based on file path
-        if source_file.startswith("sdk/"):
-            return self.canonical_docs_path / "daml"
-        elif "daml-finance" in source_file or source_file.startswith("docs/generated/"):
-            return self.canonical_docs_path / "daml-finance"
-        elif source_file.startswith("canton/"):
-            return self.canonical_docs_path / "canton"
+        # Check each official repository whitelist
+        for repo_name, repo_info in self.official_repos.items():
+            repo_path = repo_info["path"]
+            allowed_paths = repo_info["allowed_paths"]
+            
+            # Check if file path matches any allowed path pattern
+            for allowed_path in allowed_paths:
+                if source_file.startswith(allowed_path):
+                    # Verify the repository actually exists
+                    if repo_path.exists() and (repo_path / ".git").exists():
+                        logger.debug(f"File {source_file} mapped to official repo: {repo_name}")
+                        return repo_path
+                    else:
+                        logger.warning(f"Official repo {repo_name} not found at {repo_path}")
+                        return None
+        
+        # File path not in any official repository whitelist
+        logger.error(f"SECURITY REJECTION: File {source_file} not in official repository whitelist")
+        return None
+    
+    def validate_official_repos(self) -> bool:
+        """
+        Validate that all official repositories are properly configured and accessible.
+        
+        Returns:
+            True if all official repos are valid, False otherwise
+        """
+        logger.info("Validating official repository configuration...")
+        
+        all_valid = True
+        
+        for repo_name, repo_info in self.official_repos.items():
+            repo_path = repo_info["path"]
+            
+            # Check if repo directory exists
+            if not repo_path.exists():
+                logger.error(f"Official repo {repo_name} not found at {repo_path}")
+                all_valid = False
+                continue
+            
+            # Check if it's a Git repository
+            if not (repo_path / ".git").exists():
+                logger.error(f"Official repo {repo_name} is not a Git repository: {repo_path}")
+                all_valid = False
+                continue
+            
+            # Check if we can access Git information
+            try:
+                result = subprocess.run(
+                    ["git", "rev-parse", "--is-inside-work-tree"],
+                    cwd=repo_path,
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                if result.stdout.strip() != "true":
+                    logger.error(f"Official repo {repo_name} is not a valid Git work tree: {repo_path}")
+                    all_valid = False
+                    continue
+                
+                logger.info(f"✅ Official repo {repo_name} validated: {repo_path}")
+                
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Failed to validate Git repo {repo_name}: {e}")
+                all_valid = False
+        
+        if all_valid:
+            logger.info("All official repositories validated successfully")
         else:
-            # Default to DAML repo for unknown paths
-            return self.canonical_docs_path / "daml"
+            logger.error("Some official repositories failed validation")
+        
+        return all_valid
     
     def load_all_resources(self) -> Dict[str, List[Dict[str, Any]]]:
         """
