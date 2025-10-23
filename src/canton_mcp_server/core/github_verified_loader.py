@@ -69,15 +69,11 @@ class GitHubVerifiedResourceLoader:
                 logger.warning(f"No Git verification fields found in {file_path}")
                 return None
             
-            # GATE 2: Schema validation (documentation quality)
-            try:
-                # Determine resource type from file path for schema validation
-                resource_type = self._get_resource_type_from_path(file_path)
-                self.validator.validate_resource(resource, resource_type)
-                logger.debug(f"GATE 2 PASSED - Schema validation successful for {file_path}")
-            except SchemaValidationError as e:
-                logger.error(f"GATE 2 FAILED - Schema validation failed for {file_path}: {e}")
+            # GATE 2: Documentation content validation (file type filtering)
+            if not self._validate_documentation_file_type(resource):
+                logger.error(f"GATE 2 FAILED - Not a documentation file: {file_path}")
                 return None
+            logger.debug(f"GATE 2 PASSED - Documentation file type validation successful for {file_path}")
             
             logger.info(f"Both gates passed - Successfully loaded resource: {file_path}")
             return resource
@@ -111,6 +107,75 @@ class GitHubVerifiedResourceLoader:
         else:
             # Default fallback
             return "pattern"
+    
+    def _validate_documentation_file_type(self, resource: Dict[str, Any]) -> bool:
+        """
+        Validate that the resource comes from a documentation file type.
+        
+        This filters out build files, templates, and non-documentation content
+        by checking the source file extension.
+        
+        Args:
+            resource: Resource dictionary with source_file field
+            
+        Returns:
+            True if file type indicates documentation content, False otherwise
+        """
+        source_file = resource.get("source_file", "")
+        
+        # Documentation file extensions (actual content)
+        doc_extensions = {
+            ".md",      # Markdown files
+            ".rst",     # reStructuredText files  
+            ".txt",     # Plain text files
+            ".yaml",    # YAML documentation
+            ".yml",     # YAML documentation
+            ".json",    # JSON documentation
+        }
+        
+        # Build/template file extensions (filter out)
+        build_extensions = {
+            ".py",      # Python scripts (Sphinx, build tools)
+            ".js",      # JavaScript files
+            ".css",     # Stylesheets
+            ".html",    # Generated HTML
+            ".conf",    # Configuration files
+            ".ini",     # Configuration files
+            ".toml",    # Configuration files
+            ".lock",    # Lock files
+            ".log",     # Log files
+        }
+        
+        # Get file extension
+        file_ext = Path(source_file).suffix.lower()
+        
+        # Check if it's a documentation file
+        if file_ext in doc_extensions:
+            logger.debug(f"File type validation PASSED: {source_file} (extension: {file_ext})")
+            return True
+        
+        # Check if it's a build file (reject)
+        if file_ext in build_extensions:
+            logger.debug(f"File type validation FAILED: {source_file} (build file: {file_ext})")
+            return False
+        
+        # Special cases for files without extensions
+        if not file_ext:
+            filename = Path(source_file).name.lower()
+            
+            # Documentation files without extensions
+            if filename in {"readme", "license", "changelog", "contributing", "authors"}:
+                logger.debug(f"File type validation PASSED: {source_file} (documentation file)")
+                return True
+            
+            # Build files without extensions
+            if filename in {"makefile", "dockerfile", "docker-compose", "sphinx", "conf"}:
+                logger.debug(f"File type validation FAILED: {source_file} (build file)")
+                return False
+        
+        # Default: allow files without clear build indicators
+        logger.debug(f"File type validation PASSED: {source_file} (unknown extension, allowing)")
+        return True
     
     def _verify_github_integrity(self, resource: Dict[str, Any]) -> bool:
         """
