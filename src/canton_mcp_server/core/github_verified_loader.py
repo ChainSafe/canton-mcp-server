@@ -71,7 +71,9 @@ class GitHubVerifiedResourceLoader:
             
             # GATE 2: Schema validation (documentation quality)
             try:
-                self.validator.validate_resource(resource, file_path)
+                # Determine resource type from file path for schema validation
+                resource_type = self._get_resource_type_from_path(file_path)
+                self.validator.validate_resource(resource, file_path, resource_type)
                 logger.debug(f"GATE 2 PASSED - Schema validation successful for {file_path}")
             except SchemaValidationError as e:
                 logger.error(f"GATE 2 FAILED - Schema validation failed for {file_path}: {e}")
@@ -91,6 +93,24 @@ class GitHubVerifiedResourceLoader:
         """Check if resource has Git verification fields."""
         required_fields = ["canonical_hash", "source_commit", "source_file"]
         return all(field in resource for field in required_fields)
+    
+    def _get_resource_type_from_path(self, file_path: Path) -> str:
+        """Determine resource type from file path."""
+        # Extract the parent directory name (e.g., "patterns" from "resources/patterns/file.yaml")
+        parent_dir = file_path.parent.name
+        
+        # Map directory names to resource types
+        if parent_dir == "patterns":
+            return "pattern"
+        elif parent_dir == "anti_patterns":
+            return "anti_pattern"
+        elif parent_dir == "rules":
+            return "rule"
+        elif parent_dir == "docs":
+            return "doc"
+        else:
+            # Default fallback
+            return "pattern"
     
     def _verify_github_integrity(self, resource: Dict[str, Any]) -> bool:
         """

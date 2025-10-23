@@ -33,8 +33,8 @@ def get_github_loader() -> GitHubVerifiedResourceLoader:
     global _github_loader
     
     if _github_loader is None:
-        # Initialize with resources directory
-        resources_dir = Path("resources")
+        # Initialize with resources directory (relative to project root)
+        resources_dir = Path("../../resources")  # Go up from src/canton_mcp_server/ to project root
         _github_loader = GitHubVerifiedResourceLoader(resources_dir)
     
     return _github_loader

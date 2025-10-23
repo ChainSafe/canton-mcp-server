@@ -37,7 +37,7 @@ class GitHubAPIVerifier:
         # Official repositories configuration
         self.official_repos = {
             "daml": GitHubRepo("digital-asset", "daml", "DAML"),
-            "canton": GitHubRepo("DACH-NY", "canton", "Canton"),
+            "canton": GitHubRepo("digital-asset", "canton", "Canton"),
             "daml-finance": GitHubRepo("digital-asset", "daml-finance", "DAML Finance")
         }
         
