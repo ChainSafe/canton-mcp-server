@@ -36,16 +36,15 @@ class GitVerifiedResourceLoader:
     
     def load_resource_file(self, file_path: Path) -> Optional[Dict[str, Any]]:
         """
-        Load a single resource file with Git verification.
+        Load a single resource file with two-gate validation:
+        1. Git verification (authenticity)
+        2. Schema validation (documentation quality)
         
         Args:
             file_path: Path to the YAML resource file
             
         Returns:
             Resource dictionary if valid, None if invalid
-            
-        Raises:
-            GitVerificationError: If Git verification fails
         """
         try:
             # Load YAML content
@@ -56,20 +55,25 @@ class GitVerifiedResourceLoader:
                 logger.warning(f"Empty resource file: {file_path}")
                 return None
             
-            # Verify Git integrity if Git fields are present
+            # GATE 1: Git verification (authenticity)
             if self._has_git_verification_fields(resource):
                 if not self._verify_git_integrity(resource):
-                    logger.error(f"Git verification failed for {file_path}")
-                    raise GitVerificationError(f"Resource integrity verification failed: {file_path}")
+                    logger.error(f"GATE 1 FAILED - Git verification failed for {file_path}")
+                    return None
+                logger.debug(f"GATE 1 PASSED - Git verification successful for {file_path}")
+            else:
+                logger.warning(f"No Git verification fields found in {file_path}")
+                return None
             
-            # Validate schema (simplified - just structure validation)
+            # GATE 2: Schema validation (documentation quality)
             try:
                 self.validator.validate_resource(resource, file_path)
+                logger.debug(f"GATE 2 PASSED - Schema validation successful for {file_path}")
             except SchemaValidationError as e:
-                logger.warning(f"Schema validation warning for {file_path}: {e}")
-                # Don't fail on schema validation - Git verification is primary
+                logger.error(f"GATE 2 FAILED - Schema validation failed for {file_path}: {e}")
+                return None
             
-            logger.debug(f"Successfully loaded resource: {file_path}")
+            logger.info(f"Both gates passed - Successfully loaded resource: {file_path}")
             return resource
             
         except yaml.YAMLError as e:
@@ -157,29 +161,32 @@ class GitVerifiedResourceLoader:
     
     def _load_resources_from_directory(self, directory: Path) -> List[Dict[str, Any]]:
         """
-        Load all resources from a specific directory.
+        Load all resources from a specific directory with two-gate validation.
         
         Args:
             directory: Directory containing resource files
             
         Returns:
-            List of loaded resources
+            List of loaded resources (only those passing both gates)
         """
         resources = []
+        failed_files = []
         
         for file_path in directory.glob("*.yaml"):
             try:
                 resource = self.load_resource_file(file_path)
                 if resource:
                     resources.append(resource)
-            except GitVerificationError as e:
-                logger.error(f"Git verification failed for {file_path}: {e}")
-                # Continue loading other resources
+                else:
+                    failed_files.append(file_path.name)
             except Exception as e:
                 logger.error(f"Failed to load {file_path}: {e}")
-                # Continue loading other resources
+                failed_files.append(file_path.name)
         
-        logger.info(f"Loaded {len(resources)} resources from {directory}")
+        if failed_files:
+            logger.warning(f"Failed to load {len(failed_files)} files from {directory}: {failed_files}")
+        
+        logger.info(f"Successfully loaded {len(resources)} resources from {directory}")
         return resources
     
     def get_resource_by_name(self, name: str, resource_type: str) -> Optional[Dict[str, Any]]:
@@ -206,12 +213,12 @@ class GitVerifiedResourceLoader:
     
     def verify_all_resources(self) -> Dict[str, List[str]]:
         """
-        Verify integrity of all loaded resources.
+        Verify integrity of all loaded resources using two-gate validation.
         
         Returns:
             Dictionary mapping resource types to lists of verification errors
         """
-        logger.info("Verifying integrity of all resources...")
+        logger.info("Verifying integrity of all resources with two-gate validation...")
         
         verification_results = {
             "patterns": [],
@@ -224,17 +231,33 @@ class GitVerifiedResourceLoader:
         
         for resource_type, resources in all_resources.items():
             for resource in resources:
+                # Check Gate 1: Git verification
                 if self._has_git_verification_fields(resource):
                     if not self._verify_git_integrity(resource):
-                        error_msg = f"Git verification failed for {resource.get('name', 'unknown')}"
+                        error_msg = f"GATE 1 FAILED - Git verification failed for {resource.get('name', 'unknown')}"
                         verification_results[resource_type].append(error_msg)
+                        continue
+                else:
+                    error_msg = f"GATE 1 FAILED - Missing Git verification fields for {resource.get('name', 'unknown')}"
+                    verification_results[resource_type].append(error_msg)
+                    continue
+                
+                # Check Gate 2: Schema validation
+                try:
+                    self.validator.validate_resource(resource, Path(f"dummy/{resource.get('name', 'unknown')}.yaml"))
+                except SchemaValidationError as e:
+                    error_msg = f"GATE 2 FAILED - Schema validation failed for {resource.get('name', 'unknown')}: {e}"
+                    verification_results[resource_type].append(error_msg)
         
         # Log verification results
         total_errors = sum(len(errors) for errors in verification_results.values())
         if total_errors == 0:
-            logger.info("All resources passed Git verification")
+            logger.info("All resources passed both gates (Git verification + Schema validation)")
         else:
-            logger.warning(f"Git verification found {total_errors} errors")
+            logger.warning(f"Two-gate validation found {total_errors} errors")
+            for resource_type, errors in verification_results.items():
+                if errors:
+                    logger.warning(f"  {resource_type}: {len(errors)} errors")
         
         return verification_results
     
