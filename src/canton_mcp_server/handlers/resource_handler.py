@@ -20,37 +20,37 @@ from ..core.types.mcp import (
     Resource,
     TextResourceContents,
 )
-from ..core.github_verified_loader import GitHubVerifiedResourceLoader
+from ..core.direct_file_loader import DirectFileResourceLoader
 
 logger = logging.getLogger(__name__)
 
-# Global GitHub-verified loader instance
-_github_loader: Optional[GitHubVerifiedResourceLoader] = None
+# Global direct file loader instance
+_direct_loader: Optional[DirectFileResourceLoader] = None
 
 
-def get_github_loader() -> GitHubVerifiedResourceLoader:
-    """Get or create the GitHub-verified resource loader."""
-    global _github_loader
+def get_direct_loader() -> DirectFileResourceLoader:
+    """Get or create the direct file resource loader."""
+    global _direct_loader
     
-    if _github_loader is None:
-        # Initialize with resources directory (relative to project root)
-        resources_dir = Path("../../resources")  # Go up from src/canton_mcp_server/ to project root
-        _github_loader = GitHubVerifiedResourceLoader(resources_dir)
+    if _direct_loader is None:
+        # Initialize with canonical docs path (relative to project root)
+        canonical_docs_path = Path("../../canonical-daml-docs")  # Go up from src/canton_mcp_server/ to project root
+        _direct_loader = DirectFileResourceLoader(canonical_docs_path)
     
-    return _github_loader
+    return _direct_loader
 
 
 def handle_resources_list() -> ListResourcesResult:
     """
-    Handle resources/list request with GitHub API verification.
+    Handle resources/list request with direct file serving.
     
-    Returns list of available GitHub-verified Canton canonical resources.
+    Returns list of available canonical documentation files from cloned repos.
     
     Returns:
         ListResourcesResult with available resources
     """
-    loader = get_github_loader()
-    all_resources = loader.load_all_resources()
+    loader = get_direct_loader()
+    all_resources = loader.scan_repositories()
     
     # Convert to MCP Resource objects
     mcp_resources = []
@@ -65,31 +65,34 @@ def handle_resources_list() -> ListResourcesResult:
                 mime_type="application/json"
             )
             
-            # Add GitHub API verification metadata
+            # Add direct file metadata
             mcp_resource._meta = {
                 "canonical_hash": resource.get("canonical_hash"),
                 "source_commit": resource.get("source_commit"),
                 "source_file": resource.get("source_file"),
+                "source_repo": resource.get("source_repo"),
+                "file_path": resource.get("file_path"),
+                "file_extension": resource.get("file_extension"),
                 "extracted_at": resource.get("extracted_at"),
                 "resource_type": resource_type,
-                "github_verified": True
+                "direct_file": True
             }
             
             mcp_resources.append(mcp_resource)
     
-    logger.info(f"Returning {len(mcp_resources)} GitHub-verified resources")
+    logger.info(f"Returning {len(mcp_resources)} direct file resources")
     return ListResourcesResult(resources=mcp_resources)
 
 
 def handle_resources_read(uri: str) -> ReadResourceResult:
     """
-    Handle resources/read request with GitHub API verification.
+    Handle resources/read request with direct file serving.
     
     Args:
         uri: Resource URI to read (format: canton://{type}/{name})
         
     Returns:
-        ReadResourceResult with GitHub-verified resource contents
+        ReadResourceResult with direct file contents
         
     Raises:
         ValueError: If URI is invalid or resource not found
@@ -110,30 +113,43 @@ def handle_resources_read(uri: str) -> ReadResourceResult:
     if resource_type not in valid_types:
         raise ValueError(f"Invalid resource type: {resource_type}. Must be one of: {valid_types}")
     
-    # Get resource from GitHub-verified loader
-    loader = get_github_loader()
+    # Get resource from direct file loader
+    loader = get_direct_loader()
     resource = loader.get_resource_by_name(resource_name, resource_type)
     
     if not resource:
-        raise ValueError(f"GitHub-verified resource not found: {uri}")
+        raise ValueError(f"Direct file resource not found: {uri}")
     
-    # Serialize resource content as JSON
-    content_text = json.dumps(resource, indent=2)
+    # Get file content directly
+    content_text = resource.get("content", "")
     
-    # Create resource contents with GitHub API verification metadata
+    # Determine MIME type based on file extension
+    file_extension = resource.get("file_extension", "")
+    if file_extension == ".md":
+        mime_type = "text/markdown"
+    elif file_extension == ".rst":
+        mime_type = "text/x-rst"
+    elif file_extension == ".daml":
+        mime_type = "text/x-daml"
+    elif file_extension in [".yaml", ".yml"]:
+        mime_type = "text/yaml"
+    else:
+        mime_type = "text/plain"
+    
+    # Create resource contents with direct file metadata
     resource_contents = TextResourceContents(
         uri=uri,
         text=content_text,
-        mime_type="application/json"
+        mime_type=mime_type
     )
     
-    logger.info(f"Read GitHub-verified resource: {uri} (hash: {resource.get('canonical_hash', 'unknown')})")
+    logger.info(f"Read direct file resource: {uri} (repo: {resource.get('source_repo', 'unknown')}, file: {resource.get('file_path', 'unknown')})")
     return ReadResourceResult(contents=[resource_contents])
 
 
 def handle_resources_subscribe(uri: str) -> Dict[str, Any]:
     """
-    Handle resources/subscribe request with GitHub API verification.
+    Handle resources/subscribe request with direct file serving.
     
     Args:
         uri: Resource URI to subscribe to
@@ -160,21 +176,21 @@ def handle_resources_subscribe(uri: str) -> Dict[str, Any]:
     if resource_type not in valid_types:
         raise ValueError(f"Invalid resource type: {resource_type}")
     
-    # Check if GitHub-verified resource exists
-    loader = get_github_loader()
+    # Check if direct file resource exists
+    loader = get_direct_loader()
     resource = loader.get_resource_by_name(resource_name, resource_type)
     
     if not resource:
-        raise ValueError(f"GitHub-verified resource not found: {uri}")
+        raise ValueError(f"Direct file resource not found: {uri}")
     
-    # TODO: Implement actual subscription mechanism for GitHub-verified resources
-    logger.info(f"Subscribed to GitHub-verified resource: {uri} (hash: {resource.get('canonical_hash', 'unknown')})")
+    # TODO: Implement actual subscription mechanism for direct file resources
+    logger.info(f"Subscribed to direct file resource: {uri} (repo: {resource.get('source_repo', 'unknown')})")
     return {}
 
 
 def handle_resources_unsubscribe(uri: str) -> Dict[str, Any]:
     """
-    Handle resources/unsubscribe request with GitHub API verification.
+    Handle resources/unsubscribe request with direct file serving.
     
     Args:
         uri: Resource URI to unsubscribe from
@@ -182,6 +198,6 @@ def handle_resources_unsubscribe(uri: str) -> Dict[str, Any]:
     Returns:
         Empty dict (unsubscription confirmation)
     """
-    # TODO: Implement actual unsubscription mechanism for GitHub-verified resources
-    logger.info(f"Unsubscribed from GitHub-verified resource: {uri}")
+    # TODO: Implement actual unsubscription mechanism for direct file resources
+    logger.info(f"Unsubscribed from direct file resource: {uri}")
     return {}
