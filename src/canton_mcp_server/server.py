@@ -39,6 +39,7 @@ from canton_mcp_server.handlers import (
     handle_tools_list,
 )
 from canton_mcp_server.handlers.resource_handler import (
+    handle_resources_list,
     handle_resources_read,
 )
 from canton_mcp_server.payment_handler import (

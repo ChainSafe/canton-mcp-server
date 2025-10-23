@@ -1,76 +1,48 @@
 """
-Simplified Git-Verified Resource Loader
+GitHub-Verified Resource Loader
 
-Loads resources with Git integrity verification, eliminating complex schema validation
-in favor of cryptographic verification.
+Loads resources with GitHub API verification, eliminating the need for local Git repositories
+while maintaining full cryptographic verification.
 """
 
 import yaml
 import logging
-import subprocess
 from typing import Dict, List, Any, Optional
 from pathlib import Path
 
-from .git_verification import verify_git_blob, GitVerificationError
+from .github_verification import get_github_verifier, verify_github_blob
 from .resources.validator import get_validator, SchemaValidationError
 
 logger = logging.getLogger(__name__)
 
 
-class GitVerifiedResourceLoader:
+class GitHubVerifiedResourceLoader:
     """
-    Simplified resource loader that uses Git verification for integrity.
+    Resource loader that uses GitHub API for Git verification.
+    
+    This eliminates the need for local Git repositories while maintaining
+    full cryptographic verification of canonical resources.
     """
     
-    def __init__(self, resources_dir: Path, canonical_docs_path: Path):
+    def __init__(self, resources_dir: Path):
         """
-        Initialize the loader.
+        Initialize the GitHub-verified resource loader.
         
         Args:
             resources_dir: Directory containing YAML resource files
-            canonical_docs_path: Path to canonical documentation repositories
         """
         self.resources_dir = resources_dir
-        self.canonical_docs_path = canonical_docs_path
         self.validator = get_validator()
+        self.github_verifier = get_github_verifier()
         self._resources: Dict[str, Any] = {}
         
-        # Official repository whitelist for security
-        self.official_repos = {
-            "daml": {
-                "path": canonical_docs_path / "daml",
-                "allowed_paths": [
-                    "sdk/",
-                    "docs/",
-                    "README.md",
-                    "LICENSE",
-                    "CONTRIBUTING.md"
-                ]
-            },
-            "canton": {
-                "path": canonical_docs_path / "canton", 
-                "allowed_paths": [
-                    "canton/",
-                    "docs/",
-                    "README.md",
-                    "LICENSE"
-                ]
-            },
-            "daml-finance": {
-                "path": canonical_docs_path / "daml-finance",
-                "allowed_paths": [
-                    "docs/generated/",
-                    "README.md",
-                    "LICENSE"
-                ]
-            }
-        }
+        # Validate GitHub API access on initialization
+        if not self.github_verifier.validate_official_repos():
+            logger.warning("Some official repositories failed GitHub API validation")
     
     def load_resource_file(self, file_path: Path) -> Optional[Dict[str, Any]]:
         """
-        Load a single resource file with two-gate validation:
-        1. Git verification (authenticity)
-        2. Schema validation (documentation quality)
+        Load a single resource file with GitHub API verification.
         
         Args:
             file_path: Path to the YAML resource file
@@ -87,12 +59,12 @@ class GitVerifiedResourceLoader:
                 logger.warning(f"Empty resource file: {file_path}")
                 return None
             
-            # GATE 1: Git verification (authenticity)
+            # GATE 1: GitHub API verification (authenticity)
             if self._has_git_verification_fields(resource):
-                if not self._verify_git_integrity(resource):
-                    logger.error(f"GATE 1 FAILED - Git verification failed for {file_path}")
+                if not self._verify_github_integrity(resource):
+                    logger.error(f"GATE 1 FAILED - GitHub API verification failed for {file_path}")
                     return None
-                logger.debug(f"GATE 1 PASSED - Git verification successful for {file_path}")
+                logger.debug(f"GATE 1 PASSED - GitHub API verification successful for {file_path}")
             else:
                 logger.warning(f"No Git verification fields found in {file_path}")
                 return None
@@ -120,9 +92,9 @@ class GitVerifiedResourceLoader:
         required_fields = ["canonical_hash", "source_commit", "source_file"]
         return all(field in resource for field in required_fields)
     
-    def _verify_git_integrity(self, resource: Dict[str, Any]) -> bool:
+    def _verify_github_integrity(self, resource: Dict[str, Any]) -> bool:
         """
-        Verify Git integrity of a resource.
+        Verify GitHub API integrity of a resource.
         
         Args:
             resource: Resource dictionary with Git verification fields
@@ -134,98 +106,8 @@ class GitVerifiedResourceLoader:
         source_commit = resource["source_commit"]
         source_file = resource["source_file"]
         
-        # Determine which repo the file comes from
-        repo_path = self._get_repo_path(source_file)
-        if not repo_path:
-            logger.warning(f"Unknown repository for file: {source_file}")
-            return False
-        
-        # Verify Git blob hash
-        return verify_git_blob(repo_path, source_commit, source_file, canonical_hash)
-    
-    def _get_repo_path(self, source_file: str) -> Optional[Path]:
-        """
-        Determine which official canonical repository a file comes from.
-        Uses whitelist-based security to prevent unauthorized access.
-        
-        Args:
-            source_file: Path to the source file
-            
-        Returns:
-            Path to the official repository or None if not allowed
-        """
-        # Check each official repository whitelist
-        for repo_name, repo_info in self.official_repos.items():
-            repo_path = repo_info["path"]
-            allowed_paths = repo_info["allowed_paths"]
-            
-            # Check if file path matches any allowed path pattern
-            for allowed_path in allowed_paths:
-                if source_file.startswith(allowed_path):
-                    # Verify the repository actually exists
-                    if repo_path.exists() and (repo_path / ".git").exists():
-                        logger.debug(f"File {source_file} mapped to official repo: {repo_name}")
-                        return repo_path
-                    else:
-                        logger.warning(f"Official repo {repo_name} not found at {repo_path}")
-                        return None
-        
-        # File path not in any official repository whitelist
-        logger.error(f"SECURITY REJECTION: File {source_file} not in official repository whitelist")
-        return None
-    
-    def validate_official_repos(self) -> bool:
-        """
-        Validate that all official repositories are properly configured and accessible.
-        
-        Returns:
-            True if all official repos are valid, False otherwise
-        """
-        logger.info("Validating official repository configuration...")
-        
-        all_valid = True
-        
-        for repo_name, repo_info in self.official_repos.items():
-            repo_path = repo_info["path"]
-            
-            # Check if repo directory exists
-            if not repo_path.exists():
-                logger.error(f"Official repo {repo_name} not found at {repo_path}")
-                all_valid = False
-                continue
-            
-            # Check if it's a Git repository
-            if not (repo_path / ".git").exists():
-                logger.error(f"Official repo {repo_name} is not a Git repository: {repo_path}")
-                all_valid = False
-                continue
-            
-            # Check if we can access Git information
-            try:
-                result = subprocess.run(
-                    ["git", "rev-parse", "--is-inside-work-tree"],
-                    cwd=repo_path,
-                    capture_output=True,
-                    text=True,
-                    check=True
-                )
-                if result.stdout.strip() != "true":
-                    logger.error(f"Official repo {repo_name} is not a valid Git work tree: {repo_path}")
-                    all_valid = False
-                    continue
-                
-                logger.info(f"✅ Official repo {repo_name} validated: {repo_path}")
-                
-            except subprocess.CalledProcessError as e:
-                logger.error(f"Failed to validate Git repo {repo_name}: {e}")
-                all_valid = False
-        
-        if all_valid:
-            logger.info("All official repositories validated successfully")
-        else:
-            logger.error("Some official repositories failed validation")
-        
-        return all_valid
+        # Verify using GitHub API
+        return verify_github_blob(source_file, source_commit, canonical_hash)
     
     def load_all_resources(self) -> Dict[str, List[Dict[str, Any]]]:
         """
@@ -250,13 +132,13 @@ class GitVerifiedResourceLoader:
                 resources[resource_type] = self._load_resources_from_directory(type_dir)
         
         total_resources = sum(len(resource_list) for resource_list in resources.values())
-        logger.info(f"Loaded {total_resources} resources total")
+        logger.info(f"Loaded {total_resources} GitHub-verified resources total")
         
         return resources
     
     def _load_resources_from_directory(self, directory: Path) -> List[Dict[str, Any]]:
         """
-        Load all resources from a specific directory with two-gate validation.
+        Load all resources from a specific directory with GitHub API verification.
         
         Args:
             directory: Directory containing resource files
@@ -308,12 +190,12 @@ class GitVerifiedResourceLoader:
     
     def verify_all_resources(self) -> Dict[str, List[str]]:
         """
-        Verify integrity of all loaded resources using two-gate validation.
+        Verify integrity of all loaded resources using GitHub API.
         
         Returns:
             Dictionary mapping resource types to lists of verification errors
         """
-        logger.info("Verifying integrity of all resources with two-gate validation...")
+        logger.info("Verifying integrity of all resources with GitHub API verification...")
         
         verification_results = {
             "patterns": [],
@@ -326,10 +208,10 @@ class GitVerifiedResourceLoader:
         
         for resource_type, resources in all_resources.items():
             for resource in resources:
-                # Check Gate 1: Git verification
+                # Check Gate 1: GitHub API verification
                 if self._has_git_verification_fields(resource):
-                    if not self._verify_git_integrity(resource):
-                        error_msg = f"GATE 1 FAILED - Git verification failed for {resource.get('name', 'unknown')}"
+                    if not self._verify_github_integrity(resource):
+                        error_msg = f"GATE 1 FAILED - GitHub API verification failed for {resource.get('name', 'unknown')}"
                         verification_results[resource_type].append(error_msg)
                         continue
                 else:
@@ -347,9 +229,9 @@ class GitVerifiedResourceLoader:
         # Log verification results
         total_errors = sum(len(errors) for errors in verification_results.values())
         if total_errors == 0:
-            logger.info("All resources passed both gates (Git verification + Schema validation)")
+            logger.info("All resources passed both gates (GitHub API verification + Schema validation)")
         else:
-            logger.warning(f"Two-gate validation found {total_errors} errors")
+            logger.warning(f"GitHub API verification found {total_errors} errors")
             for resource_type, errors in verification_results.items():
                 if errors:
                     logger.warning(f"  {resource_type}: {len(errors)} errors")
