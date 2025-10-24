@@ -24,6 +24,7 @@ from .base import (
     RuleResource,
 )
 from .registry import get_registry
+from .validator import get_validator, SchemaValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +119,31 @@ class ResourceLoader:
             if not data:
                 logger.warning(f"Empty YAML file: {file_path}")
                 return None
+            
+            # Determine resource type for schema validation
+            resource_type_map = {
+                ResourceCategory.PATTERN: "pattern",
+                ResourceCategory.ANTI_PATTERN: "anti-pattern",
+                ResourceCategory.RULE: "rule",
+                ResourceCategory.DOC: "doc"
+            }
+            resource_type = resource_type_map.get(category)
+            
+            # Validate against schema if available
+            if resource_type:
+                try:
+                    validator = get_validator()
+                    if validator.is_schema_loaded(resource_type):
+                        validator.validate_resource(data, resource_type)
+                        logger.debug(f"Schema validation passed for {file_path}")
+                    else:
+                        logger.warning(f"No schema loaded for resource type: {resource_type}")
+                except SchemaValidationError as e:
+                    logger.error(f"Schema validation failed for {file_path}: {e}")
+                    if e.errors:
+                        for error in e.errors:
+                            logger.error(f"  - {error}")
+                    return None
             
             # Extract metadata
             name = data.get('name')

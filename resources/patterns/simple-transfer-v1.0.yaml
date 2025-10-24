@@ -1,36 +1,61 @@
 name: simple-transfer
-version: "1.0"
-category: patterns
-description: "PLACEHOLDER: Simple asset transfer pattern with single signatory - UPDATED VIA HOT-RELOAD"
+version: "1.0.0"
+description: "Canonical pattern for transferring ownership of an asset with proper authorization"
 tags:
   - transfer
   - asset
-  - simple
-  - placeholder
-author: "Canton MCP Server - PLACEHOLDER"
-created_at: "2025-01-15T10:00:00Z"
+  - authorization
+  - basic
+author: "Digital Asset"
+created_at: "2024-01-15T10:00:00Z"
+updated_at: "2024-01-15T10:00:00Z"
 
-content:
-  pattern_type: "asset_transfer"
-  signatories:
-    - "sender"
-    - "receiver"
-  observers:
-    - "auditor"
-  
-  template: |
-    template SimpleTransfer
-      with
-        sender: Party
-        receiver: Party
-        asset: ContractId Asset
-      where
-        signatory sender
-        observer receiver
-      choice Transfer: ContractId SimpleTransfer
-        controller sender
+pattern_type: asset_transfer
+daml_template: |
+  template AssetTransfer
+    with
+      asset: Asset
+      currentOwner: Party
+      newOwner: Party
+    where
+      signatory currentOwner
+      observer newOwner
+      
+      choice TransferOwnership : ContractId AssetTransfer
+        controller currentOwner
         do
-          create SimpleTransfer with
-            sender = receiver
-            receiver = sender
-            asset = asset
+          create this with currentOwner = newOwner
+
+authorization_requirements:
+  - id: REQ-AUTH-001
+    rule: "Controller must be signatory"
+    satisfied: true
+    explanation: "currentOwner is signatory and controller of TransferOwnership choice"
+  - id: REQ-AUTH-002
+    rule: "Asset ownership must be properly maintained"
+    satisfied: true
+    explanation: "Transfer creates new contract with updated owner, maintaining authorization"
+
+when_to_use:
+  - "Simple ownership transfers between two parties"
+  - "Unilateral asset transfers where current owner has full authority"
+  - "Basic asset management scenarios"
+
+when_not_to_use:
+  - "Multi-party approval required"
+  - "Complex state transitions with multiple assets"
+  - "Scenarios requiring external validation or conditions"
+
+security_considerations:
+  - "Ensure currentOwner is properly authenticated"
+  - "Validate asset state before transfer"
+  - "Consider adding transfer limits or restrictions if needed"
+
+test_cases:
+  - description: "Valid ownership transfer"
+    passes: true
+    code: "alice transfers asset to bob"
+  - description: "Unauthorized transfer attempt"
+    passes: false
+    expected_error: "Not authorized"
+    code: "charlie attempts to transfer alice's asset"

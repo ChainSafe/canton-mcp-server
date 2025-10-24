@@ -1,6 +1,9 @@
 name: missing-signatory
 version: "1.0.0"
-description: "Critical anti-pattern where DAML templates lack proper signatory declarations"
+description: "PLACEHOLDER: Anti-pattern where required signatories are not properly defined"
+author: Canton Team - PLACEHOLDER
+created_at: "2024-01-15T10:00:00Z"
+updated_at: "2024-01-15T10:00:00Z"
 tags:
   - anti-pattern
   - signatory
@@ -12,7 +15,7 @@ created_at: "2024-01-15T10:00:00Z"
 updated_at: "2024-01-15T10:00:00Z"
 
 anti_pattern_type: authorization_vulnerability
-severity: critical
+severity: high
 problematic_code: |
   template VulnerableContract
     with
@@ -31,13 +34,12 @@ why_problematic: |
   This anti-pattern occurs when DAML contracts fail to properly define
   all required signatories, leading to potential authorization bypasses.
   Without proper signatory declarations, contracts can be created or
-  modified by unauthorized parties, violating DAML's authorization model.
+  modified by unauthorized parties.
 
 detection_pattern:
   - "Template definitions without signatory clauses"
   - "Choices with controllers not in signatory list"
   - "Multi-party contracts with incomplete signatory declarations"
-  - "Missing signatory declarations in template definitions"
 
 correct_alternative: |
   template SecureContract
@@ -59,13 +61,9 @@ impact:
   - type: correctness
     severity: high
     description: "Authorization bypass leading to asset manipulation"
-  - type: compliance
-    severity: high
-    description: "Violation of DAML authorization model"
 
 remediation:
   - "Add proper signatory declarations to all templates"
   - "Ensure all choice controllers are signatories or have explicit authorization"
   - "Use static analysis tools to detect missing signatories"
   - "Implement comprehensive testing for authorization scenarios"
-  - "Review all template definitions for complete signatory coverage"
