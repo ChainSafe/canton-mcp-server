@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 # Add the src directory to the Python path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from canton_mcp_server.core.resource_extractor import GitVerifiedResourceExtractor, ResourceExtractionError
 
