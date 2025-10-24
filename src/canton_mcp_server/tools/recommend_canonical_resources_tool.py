@@ -38,12 +38,12 @@ class RecommendCanonicalResourcesParams(MCPModel):
         default=None,
         description="Required complexity level ('beginner', 'intermediate', 'advanced')"
     )
-    constraints: Optional[List[str]] = Field(
-        default=None,
+    constraints: List[str] = Field(
+        default=[],
         description="List of specific constraints or requirements"
     )
-    existing_patterns: Optional[List[str]] = Field(
-        default=None,
+    existing_patterns: List[str] = Field(
+        default=[],
         description="List of patterns you're already using to avoid duplicates"
     )
 

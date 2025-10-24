@@ -23,8 +23,8 @@ class SuggestPatternParams(MCPModel):
         default="basic",
         description="Required security level (basic, enhanced, enterprise)",
     )
-    constraints: Optional[List[str]] = Field(
-        default=None, description="Business or technical constraints"
+    constraints: List[str] = Field(
+        default=[], description="Business or technical constraints"
     )
 
 
