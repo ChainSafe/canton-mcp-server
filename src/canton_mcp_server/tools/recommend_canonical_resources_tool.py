@@ -5,6 +5,7 @@ MCP tool for recommending canonical resources based on user requirements.
 """
 
 import logging
+import os
 from typing import Dict, List, Any, Optional
 from pathlib import Path
 

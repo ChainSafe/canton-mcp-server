@@ -8,6 +8,7 @@ Handles MCP resource protocol methods with Git verification:
 
 import logging
 import json
+import os
 from typing import Any, Dict, List, Optional
 from pathlib import Path
 
