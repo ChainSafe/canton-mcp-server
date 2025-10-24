@@ -96,7 +96,7 @@ class RecommendCanonicalResourcesTool(Tool[RecommendCanonicalResourcesParams, di
             recommendations = self._recommender.recommend_resources(request)
             
             if not recommendations:
-                yield ctx.error(ErrorCodes.NOT_FOUND, "No relevant canonical resources found for your requirements. Try adjusting your use case or constraints.")
+                yield ctx.error(ErrorCodes.UNAVAILABLE_RESOURCES, "No relevant canonical resources found for your requirements. Try adjusting your use case or constraints.")
                 return
             
             # Format recommendations
