@@ -16,7 +16,7 @@ def test_resources_list():
     
     try:
         # Import the handler
-        sys.path.insert(0, str(Path(__file__).parent / "src"))
+        sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
         from canton_mcp_server.handlers.resource_handler import handle_resources_list
         
         # Call the handler
