@@ -161,6 +161,26 @@
       },
       "minItems": 1
     },
+    "canonical_hash": {
+      "type": "string",
+      "description": "Git blob hash of the canonical source content for integrity verification",
+      "pattern": "^[a-f0-9]{40}$"
+    },
+    "source_commit": {
+      "type": "string",
+      "description": "Git commit hash where this resource was extracted from",
+      "pattern": "^[a-f0-9]{40}$"
+    },
+    "source_file": {
+      "type": "string",
+      "description": "Path to the source file in the canonical repository",
+      "minLength": 1
+    },
+    "extracted_at": {
+      "type": "string",
+      "description": "ISO 8601 timestamp when resource was extracted from Git",
+      "format": "date-time"
+    },
     "references": {
       "type": "array",
       "description": "External references and documentation",

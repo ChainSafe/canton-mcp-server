@@ -9,7 +9,10 @@ tags:
   - signatory
   - authorization
   - security
-  - placeholder
+  - critical
+author: "Digital Asset"
+created_at: "2024-01-15T10:00:00Z"
+updated_at: "2024-01-15T10:00:00Z"
 
 anti_pattern_type: authorization_vulnerability
 severity: high
