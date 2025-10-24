@@ -678,7 +678,7 @@ The Canton MCP Server implements a comprehensive safety-first architecture:
 ## Related Projects
 
 - [Model Context Protocol](https://modelcontextprotocol.io/) - The MCP specification
-- [x402](https://github.com/x402-protocol) - Payment protocol for AI services
+- [x402]([https://github.com/x402-protocol](https://github.com/ChainSafe/canton-mcp-server/issues/4)) - Payment protocol for AI services
 - [Canton](https://www.digitalasset.com/developers) - The Canton blockchain platform
 - [DAML](https://docs.daml.com/) - The DAML smart contract language
-- [DCAP](https://dcap.dev) - Performance tracking protocol (if available)
+- [DCAP]([https://dcap.dev](https://github.com/boorich/dcap)) - Performance tracking protocol (if available)
