@@ -34,7 +34,7 @@ def get_direct_loader() -> DirectFileResourceLoader:
     
     if _direct_loader is None:
         # Initialize with canonical docs path (relative to project root)
-        canonical_docs_path = Path("/Users/martinmaurer/Projects/canonical-daml-docs")  # Absolute path
+        canonical_docs_path = Path(os.environ.get("CANONICAL_DOCS_PATH", "../canonical-daml-docs"))  # Load from env var
         _direct_loader = DirectFileResourceLoader(canonical_docs_path)
     
     return _direct_loader
