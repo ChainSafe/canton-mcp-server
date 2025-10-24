@@ -59,7 +59,7 @@ class RecommendCanonicalResourcesTool(Tool[RecommendCanonicalResourcesParams, di
     def __init__(self):
         """Initialize the recommendation tool."""
         super().__init__()
-        self.loader = DirectFileResourceLoader(Path("/Users/martinmaurer/Projects/canonical-daml-docs"))
+        self.loader = DirectFileResourceLoader(Path(os.environ.get("CANONICAL_DOCS_PATH", "../canonical-daml-docs")))
         self._structured_resources = None
         self._recommender = None
     
