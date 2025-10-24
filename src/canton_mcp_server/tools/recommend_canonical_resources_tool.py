@@ -13,6 +13,7 @@ from pydantic import Field
 
 from ..core import Tool, ToolContext, register_tool
 from ..core.pricing import PricingType, ToolPricing
+from ..core.responses import ErrorCodes
 from ..core.types.models import MCPModel
 from ..core.direct_file_loader import DirectFileResourceLoader
 from ..core.structured_ingestion import StructuredIngestionEngine
@@ -95,7 +96,7 @@ class RecommendCanonicalResourcesTool(Tool[RecommendCanonicalResourcesParams, di
             recommendations = self._recommender.recommend_resources(request)
             
             if not recommendations:
-                yield ctx.error("No relevant canonical resources found for your requirements. Try adjusting your use case or constraints.")
+                yield ctx.error(ErrorCodes.NOT_FOUND, "No relevant canonical resources found for your requirements. Try adjusting your use case or constraints.")
                 return
             
             # Format recommendations
@@ -128,7 +129,7 @@ class RecommendCanonicalResourcesTool(Tool[RecommendCanonicalResourcesParams, di
             
         except Exception as e:
             logger.error(f"Error recommending canonical resources: {e}")
-            yield ctx.error(f"Failed to recommend canonical resources: {str(e)}")
+            yield ctx.error(ErrorCodes.INTERNAL_ERROR, f"Failed to recommend canonical resources: {str(e)}")
 
 
 class GetCanonicalOverviewParams(MCPModel):
