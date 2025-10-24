@@ -1,14 +1,34 @@
 # Canton MCP Server
 
-A production-ready MCP server for Canton blockchain development with DAML validation, authorization patterns, DCAP performance tracking, and x402 payment infrastructure.
+A **DAML-Safe by Construction** development platform that generates provably safe DAML code using verified canonical resources, DAML compiler integration, and Haskell's formal verification capabilities.
+
+## Core Philosophy: "DAML-Safe by Construction"
+
+**Leverage DAML compiler's existing mathematical proofs. Extend with safety annotations and formal verification.**
 
 ## Features
 
-- **DAML Code Validation**: Validate DAML code against canonical authorization patterns and business requirements
-- **Authorization Debugging**: Debug DAML authorization errors with detailed analysis and suggested fixes
-- **Pattern Suggestions**: Get recommendations for DAML authorization patterns based on workflow requirements
+### 🛡️ **Safe Code Generation**
+- **DAML Compiler Integration**: All patterns validated through DAML compilation
+- **Safety Annotations**: Add safety metadata to DAML templates
+- **Safe Code Generation**: Generate provably safe DAML code
+- **Safety Certificates**: Mathematical proof of code safety
+
+### 🔍 **Enhanced Validation Tools**
+- **DAML Code Validation**: Validate against canonical patterns with DAML compiler safety
+- **Authorization Debugging**: Debug with DAML's built-in authorization model
+- **Pattern Suggestions**: Get recommendations from DAML-compiler-validated patterns
+- **Compilation Validation**: Validate DAML compilation safety
+
+### 📚 **Canonical Resources**
+- **3,667+ Documentation Files**: From official DAML, Canton, and DAML Finance repositories
+- **Git-Verified Content**: All resources verified via GitHub API
+- **Structured Ingestion**: Categorized by use case, security level, and complexity
+- **Intelligent Recommendations**: AI-powered resource suggestions
+
+### 🚀 **Production Infrastructure**
 - **DCAP Performance Tracking**: Real-time performance monitoring via DCAP v2 protocol
-- **x402 Payment Infrastructure**: Built-in payment support (disabled by default, ready for monetization)
+- **x402 Payment Infrastructure**: Built-in payment support (disabled by default)
 - **HTTP+SSE Transport**: Streaming support with Server-Sent Events
 - **Type-Safe Tools**: Fully typed parameters and results using Pydantic models
 
@@ -83,37 +103,101 @@ The server uses **HTTP+SSE (Server-Sent Events)** transport on port `7284`:
 
 ### Available Tools
 
-The server provides three tools for Canton DAML development:
+The server provides comprehensive tools for safe DAML development:
 
-#### 1. `validate_daml_business_logic`
-Validate DAML code against canonical authorization patterns.
+#### 🛡️ **Safe Code Generation Tools**
+
+##### `generate_safe_daml_code`
+Generate provably safe DAML code using DAML-compiler-validated patterns.
+
+**Parameters:**
+- `business_intent` (string): What you want to achieve
+- `use_case` (string): Primary use case (e.g., "asset_management", "financial_instruments")
+- `security_level` (string): "basic", "enhanced", or "enterprise"
+- `constraints` (array, optional): Business/technical constraints
+
+**Returns:** Generated DAML code with safety certificate and compilation validation
+
+##### `certify_daml_pattern`
+Certify DAML patterns with safety annotations and mathematical proof.
+
+**Parameters:**
+- `daml_code` (string): DAML template to certify
+- `safety_properties` (array): Safety properties to verify
+- `business_context` (string): Business context for validation
+
+**Returns:** Safety certificate with DAML compilation validation
+
+#### 🔍 **Enhanced Validation Tools**
+
+##### `validate_daml_business_logic`
+Validate DAML code against canonical patterns with DAML compiler safety.
 
 **Parameters:**
 - `business_intent` (string): What you want to achieve
 - `daml_code` (string): DAML code to validate
 - `security_requirements` (array, optional): Security requirements
 
-**Returns:** Validation results with issues and suggestions
+**Returns:** Validation results with DAML compilation safety checks
 
-#### 2. `debug_authorization_failure`
-Debug DAML authorization errors with detailed analysis.
+##### `validate_daml_compilation`
+Validate DAML compilation safety and authorization model compliance.
+
+**Parameters:**
+- `daml_code` (string): DAML code to validate
+- `validation_level` (string): "basic", "enhanced", or "enterprise"
+
+**Returns:** Compilation validation results with safety guarantees
+
+##### `debug_authorization_failure`
+Debug DAML authorization errors using DAML's built-in authorization model.
 
 **Parameters:**
 - `error_message` (string): The authorization error message  
 - `daml_code` (string, optional): DAML code that caused the error
 - `context` (string, optional): Additional context
 
-**Returns:** Analysis and suggested fixes
+**Returns:** Analysis and suggested fixes using DAML compiler insights
 
-#### 3. `suggest_authorization_pattern`
-Get DAML authorization pattern recommendations.
+##### `suggest_authorization_pattern`
+Get DAML authorization pattern recommendations from DAML-compiler-validated patterns.
 
 **Parameters:**
 - `workflow_description` (string): Workflow to implement
 - `security_level` (string): "basic", "enhanced", or "enterprise" 
 - `constraints` (array, optional): Business/technical constraints
 
-**Returns:** Suggested patterns and implementation notes
+**Returns:** Suggested patterns with DAML compilation validation
+
+#### 📚 **Resource Management Tools**
+
+##### `recommend_canonical_resources`
+Get intelligent recommendations for canonical DAML resources.
+
+**Parameters:**
+- `use_case` (string): Primary use case
+- `description` (string): Detailed description of what you're building
+- `security_level` (string, optional): Required security level
+- `complexity_level` (string, optional): Required complexity level
+- `constraints` (array, optional): Specific constraints or requirements
+
+**Returns:** Curated list of relevant canonical resources with safety certificates
+
+##### `get_canonical_resource_overview`
+Get overview of available canonical resources organized by use case and safety level.
+
+**Parameters:** None
+
+**Returns:** Structured overview of all available canonical resources
+
+##### `get_daml_safety_certificate`
+Retrieve safety certificates for DAML patterns and templates.
+
+**Parameters:**
+- `pattern_id` (string): Pattern identifier
+- `certificate_type` (string): Type of certificate requested
+
+**Returns:** Safety certificate with mathematical proof and DAML compilation validation
 
 ### Development
 
@@ -554,14 +638,42 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## Architecture
 
-The Canton MCP Server uses a production-ready framework with:
+### **DAML-Safe by Construction Platform**
 
+The Canton MCP Server implements a comprehensive safety-first architecture:
+
+#### **Safety Gates Architecture**
+- **Gate 1: DAML Compiler Safety** - All patterns must compile successfully
+- **Gate 2: Safety Annotations** - Patterns must have safety metadata
+- **Gate 3: Formal Verification** - Safety properties must be verified
+- **Gate 4: Production Readiness** - Must be production-tested
+
+#### **Backend Engines**
+- **DAML Compiler Integration**: Validates all patterns through DAML compilation
+- **Safety Annotation System**: Adds safety metadata to DAML templates
+- **Safe Code Generation Engine**: Generates provably safe DAML code
+- **Authorization Safety Engine**: Leverages DAML's built-in authorization model
+- **Business Logic Safety Engine**: Uses DAML's consistency guarantees
+
+#### **MCP Tool Layer**
+- **Safe Code Generation Tools**: Generate and certify DAML code
+- **Enhanced Validation Tools**: Validate with DAML compiler safety
+- **Resource Management Tools**: Access canonical resources with safety certificates
+
+#### **Production Infrastructure**
 - **Tool Base Class**: Type-safe tool development with Pydantic models
 - **Pricing System**: Flexible pricing (FREE, FIXED, DYNAMIC) with x402 integration
 - **DCAP Integration**: Automatic performance tracking for all tool executions
 - **Payment Handler**: x402 payment verification and settlement
 - **Request Manager**: Lifecycle management with cancellation support
 - **FastAPI Server**: HTTP+SSE transport with streaming capabilities
+
+### **Safety Principles**
+
+1. **DAML-Safe by Construction**: Leverage DAML compiler's existing safety guarantees
+2. **Compiler-First Safety**: All validation goes through DAML compilation
+3. **Safety Annotations**: Add safety metadata to DAML templates
+4. **Complete Audit Trails**: Every DAML compilation must be logged
 
 ## Related Projects
 
