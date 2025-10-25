@@ -1,0 +1,123 @@
+services:
+  canton-mcp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: canton-mcp-server
+    ports:
+      - "7284:7284"
+    volumes:
+      # Mount source code for hot-reload during development
+      - ./src:/app/src:ro
+    environment:
+      # Enable hot-reload for Python code changes
+      - CANTON_HOT_RELOAD=true
+      # Server configuration
+      - MCP_SERVER_URL=http://localhost:7284
+      # DCAP (Performance Tracking) - adjust as needed
+      - DCAP_ENABLED=${DCAP_ENABLED:-true}
+      - DCAP_MULTICAST_IP=${DCAP_MULTICAST_IP:-159.89.110.236}
+      - DCAP_PORT=${DCAP_PORT:-10191}
+      - DCAP_SERVER_ID=${DCAP_SERVER_ID:-canton-mcp-1}
+      - DCAP_SERVER_NAME=${DCAP_SERVER_NAME:-Canton MCP Server 1}
+      # x402 Payment Configuration (disabled by default)
+      - X402_ENABLED=${X402_ENABLED:-false}
+      - X402_WALLET_ADDRESS=${X402_WALLET_ADDRESS:-}
+      - X402_WALLET_PRIVATE_KEY=${X402_WALLET_PRIVATE_KEY:-}
+      - X402_NETWORK=${X402_NETWORK:-base-sepolia}
+      - X402_TOKEN=${X402_TOKEN:-USDC}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:7284/health').read()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+    networks:
+      - canton-network
+
+  canton-mcp-server-2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: canton-mcp-server-2
+    ports:
+      - "7285:7284"
+    volumes:
+      - ./src:/app/src:ro
+    environment:
+      - CANTON_HOT_RELOAD=true
+      - MCP_SERVER_URL=http://localhost:7285
+      - DCAP_ENABLED=${DCAP_ENABLED:-true}
+      - DCAP_MULTICAST_IP=${DCAP_MULTICAST_IP:-159.89.110.236}
+      - DCAP_PORT=${DCAP_PORT:-10191}
+      - DCAP_SERVER_ID=canton-mcp-2
+      - DCAP_SERVER_NAME=Canton MCP Server 2
+      - X402_ENABLED=${X402_ENABLED:-false}
+      - X402_WALLET_ADDRESS=${X402_WALLET_ADDRESS:-}
+      - X402_WALLET_PRIVATE_KEY=${X402_WALLET_PRIVATE_KEY:-}
+      - X402_NETWORK=${X402_NETWORK:-base-sepolia}
+      - X402_TOKEN=${X402_TOKEN:-USDC}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:7284/health').read()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+    networks:
+      - canton-network
+
+  canton-mcp-server-3:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: canton-mcp-server-3
+    ports:
+      - "7286:7284"
+    volumes:
+      - ./src:/app/src:ro
+    environment:
+      - CANTON_HOT_RELOAD=true
+      - MCP_SERVER_URL=http://localhost:7286
+      - DCAP_ENABLED=${DCAP_ENABLED:-true}
+      - DCAP_MULTICAST_IP=${DCAP_MULTICAST_IP:-159.89.110.236}
+      - DCAP_PORT=${DCAP_PORT:-10191}
+      - DCAP_SERVER_ID=canton-mcp-3
+      - DCAP_SERVER_NAME=Canton MCP Server 3
+      - X402_ENABLED=${X402_ENABLED:-false}
+      - X402_WALLET_ADDRESS=${X402_WALLET_ADDRESS:-}
+      - X402_WALLET_PRIVATE_KEY=${X402_WALLET_PRIVATE_KEY:-}
+      - X402_NETWORK=${X402_NETWORK:-base-sepolia}
+      - X402_TOKEN=${X402_TOKEN:-USDC}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:7284/health').read()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+    networks:
+      - canton-network
+
+  mcp-tester:
+    build:
+      context: ./test-container
+      dockerfile: Dockerfile
+    container_name: canton-mcp-tester
+    depends_on:
+      - canton-mcp-server
+      - canton-mcp-server-2
+      - canton-mcp-server-3
+    environment:
+      - MCP_SERVER_URLS=http://canton-mcp-server:7284/mcp,http://canton-mcp-server-2:7284/mcp,http://canton-mcp-server-3:7284/mcp
+      - MIN_INTERVAL=${MIN_INTERVAL:-1}
+      - MAX_INTERVAL=${MAX_INTERVAL:-5}
+    restart: unless-stopped
+    networks:
+      - canton-network
+
+networks:
+  canton-network:
+    driver: bridge
+

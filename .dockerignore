@@ -1,0 +1,75 @@
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# IDE and editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment files (handled separately)
+.env
+.env.*
+!.env.canton.example
+
+# Documentation (keep README.md for build)
+docs/
+*.rst
+RESEARCH_PLAN.md
+CANONICAL_SYSTEM_DESIGN.md
+
+# Test files
+test_*.py
+*_test.py
+tests/
+test-daml/
+pytest.ini
+
+# Scripts
+scripts/
+start-server.sh
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+
+# Logs
+*.log
+
+# Extracted resources (not needed in image)
+resources-extracted/
+
+# Misc
+*.bak
+*.tmp
+.coverage
+htmlcov/
+

@@ -15,8 +15,6 @@ from typing import Any, Dict, Optional
 logger = logging.getLogger(__name__)
 
 # DCAP Configuration (loaded from environment)
-SERVER_ID = "canton-mcp"
-SERVER_NAME = "Canton MCP Server"
 TRANSPORT_TYPE = "streamable-http"
 UDP_MAX_SIZE = 1472  # Maximum safe UDP packet size
 
@@ -34,6 +32,8 @@ def _get_dcap_config():
     return {
         "multicast_ip": multicast_ip,
         "port": get_env_int("DCAP_PORT", 10191),
+        "server_id": get_env("DCAP_SERVER_ID", "canton-mcp"),
+        "server_name": get_env("DCAP_SERVER_NAME", "Canton MCP Server"),
     }
 
 
@@ -109,7 +109,7 @@ def send_perf_update(
             "v": 2,  # Protocol version
             "ts": int(time.time()),  # Unix timestamp
             "t": "perf_update",  # Message type
-            "sid": SERVER_ID,  # Server identifier
+            "sid": config["server_id"],  # Server identifier
             "tool": tool_name,
             "exec_ms": exec_ms,
             "success": success,
