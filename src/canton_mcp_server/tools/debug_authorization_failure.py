@@ -6,14 +6,13 @@ Debug DAML authorization errors with detailed analysis.
 
 from typing import List, Optional
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from ..core import Tool, ToolContext, register_tool
 from ..core.pricing import PricingType, ToolPricing
-from ..core.types.models import MCPModel
 
 
-class DebugAuthParams(MCPModel):
+class DebugAuthParams(BaseModel):
     """Parameters for debugging authorization failures"""
 
     error_message: str = Field(description="The authorization error message")
@@ -25,7 +24,7 @@ class DebugAuthParams(MCPModel):
     )
 
 
-class DebugAuthResult(MCPModel):
+class DebugAuthResult(BaseModel):
     """Result of authorization debugging"""
 
     error_message: str = Field(description="The error message that was analyzed")
