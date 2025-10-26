@@ -61,6 +61,316 @@ pip install -e .
 canton-mcp-server
 ```
 
+### Using Docker (recommended for development)
+
+```bash
+# Clone the repository
+git clone <repository-url>
+cd canton-mcp-server
+
+# Copy environment template (optional)
+cp .env.canton.example .env.canton
+# Edit .env.canton with your configuration
+
+# Start with docker-compose
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop the server
+docker-compose down
+```
+
+The Docker setup includes:
+- **Hot-reload**: Source code changes automatically reload (Python code only)
+- **Health checks**: Automatic container health monitoring
+- **Port mapping**: Server accessible at `http://localhost:7284`
+- **Resource files**: Baked into image (rebuild to update)
+
+**Useful commands:**
+```bash
+# Rebuild after resource changes
+docker-compose up -d --build
+
+# Access container shell
+docker-compose exec canton-mcp-server bash
+
+# View server logs
+docker-compose logs -f canton-mcp-server
+
+# Restart the server
+docker-compose restart canton-mcp-server
+```
+
+**Note**: The Docker setup mounts source code for development but bakes resources into the image. If you modify files in `resources/`, rebuild the image with `docker-compose up -d --build`.
+
+### MCP Test Container
+
+The Docker setup includes an automated test container (`mcp-tester`) that continuously validates the MCP server by making random tool calls at irregular intervals.
+
+#### Overview
+
+**Purpose:**
+- Continuous integration testing
+- Server availability monitoring
+- Load testing and stress testing
+- Tool functionality verification
+- Real-world usage simulation
+
+**Architecture:**
+- Independent Python container
+- Communicates with server via internal Docker network
+- No external dependencies beyond requests library
+- Automatic restart on failure
+- Minimal resource footprint
+
+**Files:**
+```
+test-container/
+├── Dockerfile          # Python 3.12-slim image
+├── requirements.txt    # requests>=2.32.0
+└── mcp_tester.py      # Test orchestration script
+```
+
+#### Tools Tested
+
+The container randomly calls all 5 MCP tools with realistic test data:
+
+1. **validate_daml_business_logic**
+   - Tests: DAML code validation engine
+   - Sample: Simple asset transfer template
+
+2. **debug_authorization_failure**
+   - Tests: Authorization error analysis
+   - Sample: Missing signatory error scenario
+
+3. **suggest_authorization_pattern**
+   - Tests: Pattern recommendation engine
+   - Sample: Multi-party approval workflow
+
+4. **get_canonical_resource_overview**
+   - Tests: Resource registry and metadata
+   - Sample: Full overview request
+
+5. **recommend_canonical_resources**
+   - Tests: Resource recommendation system
+   - Sample: Asset transfer use case
+
+#### Usage
+
+**Basic Commands:**
+
+```bash
+# Start both server and tester
+docker-compose up -d
+
+# View live tester logs
+docker-compose logs -f mcp-tester
+
+# View last 50 log lines
+docker-compose logs --tail 50 mcp-tester
+
+# Stop only the tester (keep server running)
+docker-compose stop mcp-tester
+
+# Start only the tester
+docker-compose start mcp-tester
+
+# Restart tester
+docker-compose restart mcp-tester
+
+# Check tester status
+docker-compose ps mcp-tester
+
+# Remove tester completely
+docker-compose rm -s -f mcp-tester
+```
+
+**Running Without Tester:**
+
+To disable the test container permanently:
+
+1. Edit `docker-compose.yml`
+2. Comment out or remove the `mcp-tester` service section
+3. Restart: `docker-compose up -d`
+
+Or run only the server:
+
+```bash
+docker-compose up -d canton-mcp-server
+```
+
+#### Configuration
+
+**Environment Variables:**
+
+```bash
+# Interval configuration
+MIN_INTERVAL=30        # Minimum seconds between calls (default: 30)
+MAX_INTERVAL=300       # Maximum seconds between calls (default: 300)
+
+# Server URL (usually auto-configured)
+MCP_SERVER_URL=http://canton-mcp-server:7284/mcp
+```
+
+**Set via docker-compose.yml:**
+
+```yaml
+services:
+  mcp-tester:
+    environment:
+      - MIN_INTERVAL=60
+      - MAX_INTERVAL=600
+```
+
+**Set via .env file:**
+
+```bash
+# .env file
+MIN_INTERVAL=60
+MAX_INTERVAL=600
+```
+
+**Set via command line:**
+
+```bash
+MIN_INTERVAL=60 MAX_INTERVAL=600 docker-compose up -d
+```
+
+#### Log Output
+
+**Success Example:**
+
+```
+mcp-tester  | [2025-10-24 17:30:15] [INFO] 🚀 Starting MCP Test Container
+mcp-tester  | [2025-10-24 17:30:15] [INFO]    Server: http://canton-mcp-server:7284/mcp
+mcp-tester  | [2025-10-24 17:30:15] [INFO]    Interval: 30-300 seconds
+mcp-tester  | [2025-10-24 17:30:15] [INFO]    Tools: 5 available
+mcp-tester  | [2025-10-24 17:30:15] [INFO] 
+mcp-tester  | [2025-10-24 17:30:15] [INFO] [#1] Calling tool: validate_daml_business_logic
+mcp-tester  | [2025-10-24 17:30:16] [INFO]    ✅ Tool executed successfully
+mcp-tester  | [2025-10-24 17:30:16] [INFO]    💤 Sleeping for 127 seconds...
+mcp-tester  | [2025-10-24 17:30:16] [INFO] 
+mcp-tester  | [2025-10-24 17:33:23] [INFO] [#2] Calling tool: debug_authorization_failure
+mcp-tester  | [2025-10-24 17:33:23] [INFO]    ✅ Tool executed successfully
+mcp-tester  | [2025-10-24 17:33:23] [INFO]    💤 Sleeping for 245 seconds...
+```
+
+**Error Handling:**
+
+```
+mcp-tester  | [2025-10-24 17:30:51] [ERROR] Request failed: Connection refused
+mcp-tester  | [2025-10-24 17:30:51] [ERROR]    ❌ Call failed: Connection refused
+mcp-tester  | [2025-10-24 17:30:51] [INFO]    💤 Sleeping for 33 seconds...
+```
+
+**Tool Error Example:**
+
+```
+mcp-tester  | [2025-10-24 17:31:24] [INFO] [#3] Calling tool: recommend_canonical_resources
+mcp-tester  | [2025-10-24 17:31:24] [WARN]    ⚠️  Tool returned error
+mcp-tester  | [2025-10-24 17:31:24] [INFO]    💤 Sleeping for 182 seconds...
+```
+
+#### Monitoring & Troubleshooting
+
+**Check if tester is running:**
+
+```bash
+docker-compose ps mcp-tester
+# Expected: "Up" status
+```
+
+**View real-time logs:**
+
+```bash
+docker-compose logs -f mcp-tester
+# Press Ctrl+C to exit
+```
+
+**Count successful calls:**
+
+```bash
+docker-compose logs mcp-tester | grep "✅" | wc -l
+```
+
+**Count failed calls:**
+
+```bash
+docker-compose logs mcp-tester | grep "❌" | wc -l
+```
+
+**Check last call:**
+
+```bash
+docker-compose logs --tail 10 mcp-tester | grep "Calling tool"
+```
+
+**Common Issues:**
+
+1. **Connection Refused** - Server not yet ready
+   - Wait 10-15 seconds for server startup
+   - Tester will automatically retry
+
+2. **Tool Returns Error** - Expected for some tools during testing
+   - Check server logs: `docker-compose logs canton-mcp-server`
+   - Some errors are intentional test scenarios
+
+3. **Tester Keeps Restarting** - Configuration issue
+   - Check environment variables
+   - Verify MIN_INTERVAL < MAX_INTERVAL
+
+#### Use Cases
+
+**Development:**
+```bash
+# Fast testing during development
+MIN_INTERVAL=5 MAX_INTERVAL=30 docker-compose up -d
+docker-compose logs -f mcp-tester
+```
+
+**Production Monitoring:**
+```bash
+# Less frequent for production
+MIN_INTERVAL=300 MAX_INTERVAL=900 docker-compose up -d
+```
+
+**Load Testing:**
+```bash
+# Scale up multiple testers
+docker-compose up -d --scale mcp-tester=5
+```
+
+**CI/CD Integration:**
+```bash
+# Start services
+docker-compose up -d
+
+# Wait for stability
+sleep 30
+
+# Check for errors
+if docker-compose logs mcp-tester | grep -q "❌"; then
+  echo "Test failures detected"
+  exit 1
+fi
+```
+
+#### Statistics
+
+View aggregated test statistics:
+
+```bash
+# Total calls made
+docker-compose logs mcp-tester | grep -c "Calling tool"
+
+# Success rate
+echo "Successful: $(docker-compose logs mcp-tester | grep -c '✅')"
+echo "Failed: $(docker-compose logs mcp-tester | grep -c '❌')"
+echo "Errors: $(docker-compose logs mcp-tester | grep -c '⚠️')"
+```
+
 ## Configuration
 
 The server uses environment variables for configuration. Create a `.env.canton` file (or set system environment variables):
@@ -211,6 +521,182 @@ uv run python -m canton_mcp_server.server
 # Test with MCP Inspector
 npx @modelcontextprotocol/inspector http://localhost:7284/mcp
 ```
+
+## Testing MCP Tools
+
+The Canton MCP Server provides multiple ways to test tool calls:
+
+### 1. Quick Test Script
+
+Run the provided test script to verify all tools:
+
+```bash
+./test-mcp-tools.sh
+```
+
+This tests:
+- Listing available tools
+- Getting canonical resource overview
+- Recommending resources for asset transfer
+- Validating DAML code
+
+### 2. MCP Inspector (Interactive UI)
+
+The official MCP Inspector provides a web-based interface to test tools:
+
+```bash
+npx @modelcontextprotocol/inspector http://localhost:7284/mcp
+```
+
+Open your browser to the displayed URL to interact with all tools visually.
+
+### 3. curl Commands
+
+Test individual tools with curl:
+
+```bash
+# List all tools
+curl -X POST http://localhost:7284/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+
+# Validate DAML code
+curl -X POST http://localhost:7284/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "tools/call",
+    "params": {
+      "name": "validate_daml_business_logic",
+      "arguments": {
+        "businessIntent": "Create a simple IOU",
+        "damlCode": "template IOU\n  with\n    issuer: Party\n    owner: Party\n  where\n    signatory issuer"
+      }
+    }
+  }'
+
+# Debug authorization failure
+curl -X POST http://localhost:7284/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "tools/call",
+    "params": {
+      "name": "debug_authorization_failure",
+      "arguments": {
+        "errorMessage": "Authorization failed: missing signatory"
+      }
+    }
+  }'
+
+# Suggest authorization pattern
+curl -X POST http://localhost:7284/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "tools/call",
+    "params": {
+      "name": "suggest_authorization_pattern",
+      "arguments": {
+        "workflowDescription": "Multi-party approval for asset transfer",
+        "securityLevel": "enhanced"
+      }
+    }
+  }'
+```
+
+### 4. Python Client
+
+Test with Python requests:
+
+```python
+import requests
+
+response = requests.post(
+    "http://localhost:7284/mcp",
+    headers={
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+    },
+    json={
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "validate_daml_business_logic",
+            "arguments": {
+                "businessIntent": "Create a simple IOU",
+                "damlCode": """
+                    template IOU
+                      with
+                        issuer: Party
+                        owner: Party
+                      where
+                        signatory issuer
+                """
+            }
+        }
+    }
+)
+
+print(response.json())
+```
+
+### 5. Claude Desktop Integration
+
+To use with Claude Desktop, add to your configuration file:
+
+**macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+**Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "canton": {
+      "command": "docker",
+      "args": [
+        "exec",
+        "canton-mcp-server",
+        "uv",
+        "run",
+        "canton-mcp-server",
+        "serve"
+      ]
+    }
+  }
+}
+```
+
+Or for non-Docker installations:
+
+```json
+{
+  "mcpServers": {
+    "canton": {
+      "command": "uv",
+      "args": ["run", "canton-mcp-server", "serve"],
+      "cwd": "/path/to/canton-mcp-server"
+    }
+  }
+}
+```
+
+### Available Tools
+
+All tools are FREE by default:
+
+1. **validate_daml_business_logic** - Validate DAML code against canonical patterns
+2. **debug_authorization_failure** - Debug authorization errors with detailed analysis
+3. **suggest_authorization_pattern** - Get pattern recommendations for workflows
+4. **recommend_canonical_resources** - Get intelligent resource recommendations
+5. **get_canonical_resource_overview** - Overview of available canonical resources
 
 ## Test DAML Contracts
 
