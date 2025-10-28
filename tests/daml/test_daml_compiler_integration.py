@@ -27,7 +27,7 @@ class TestDamlCompiler:
     def setup_method(self):
         """Setup test fixtures"""
         if DAML_AVAILABLE:
-            self.compiler = DamlCompiler(sdk_version="2.9.0", compilation_timeout=30)
+            self.compiler = DamlCompiler(sdk_version="2.10.2", compilation_timeout=30)
 
     def test_init_requires_daml_command(self):
         """Test initialization fails if daml command not found"""

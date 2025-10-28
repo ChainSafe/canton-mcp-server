@@ -258,14 +258,11 @@ dependencies:
 
     def _parse_errors(self, stderr: str) -> list[CompilationError]:
         """
-        Parse GHC-style error messages from DAML compiler stderr.
+        Parse error messages from DAML compiler stderr.
 
-        DAML compiler outputs errors in GHC format:
-        ```
-        daml/Main.daml:10:5: error:
-            • Authorization failure: missing signatory
-            • In the definition of 'transfer'
-        ```
+        Supports both formats:
+        1. GHC-style (DAML ≤2.9): `daml/Main.daml:10:5: error:`
+        2. Structured (DAML ≥2.10): `File: ... Range: ... Message: ...`
 
         Args:
             stderr: Compiler stderr output
@@ -273,6 +270,88 @@ dependencies:
         Returns:
             List of parsed CompilationErrors
         """
+        errors = []
+
+        # Try new structured format first (DAML 2.10+)
+        errors.extend(self._parse_structured_errors(stderr))
+
+        # Fallback to GHC-style format (DAML 2.9 and earlier)
+        if not errors:
+            errors.extend(self._parse_ghc_errors(stderr))
+
+        logger.debug(f"Parsed {len(errors)} errors from compiler output")
+        return errors
+
+    def _parse_structured_errors(self, stderr: str) -> list[CompilationError]:
+        """Parse DAML 2.10+ structured error format"""
+        errors = []
+        lines = stderr.split("\n")
+        i = 0
+
+        while i < len(lines):
+            # Look for structured error block
+            if lines[i].startswith("File:"):
+                file_path = lines[i].split("File:", 1)[1].strip()
+                i += 1
+
+                # Extract Range (e.g., "6:10-6:16") - may be a few lines down
+                line_num, col_num = 0, 0
+                # Search for Range within next few lines
+                j = i
+                while j < min(i + 5, len(lines)):
+                    if lines[j].startswith("Range:"):
+                        range_str = lines[j].split("Range:", 1)[1].strip()
+                        # Parse "6:10-6:16" -> line=6, col=10
+                        if ":" in range_str:
+                            parts = range_str.split("-")[0].split(":")
+                            if len(parts) >= 2:
+                                line_num = int(parts[0])
+                                col_num = int(parts[1])
+                        break
+                    j += 1
+
+                # Skip to Message line
+                while i < len(lines) and not lines[i].startswith("Message:"):
+                    i += 1
+
+                if i < len(lines) and lines[i].startswith("Message:"):
+                    i += 1
+                    # Collect message (may be multi-line, ANSI-colored)
+                    message_lines = []
+                    while i < len(lines) and not lines[i].startswith("File:") and lines[i].strip():
+                        # Strip ANSI color codes
+                        clean_line = re.sub(r'\x1b\[[0-9;]+m', '', lines[i])
+                        if "error:" in clean_line.lower():
+                            # Extract error message after "error:" (case-insensitive)
+                            error_match = re.search(r'error:\s*(.+)', clean_line, re.IGNORECASE)
+                            if error_match:
+                                message_lines.append(error_match.group(1).strip())
+                            else:
+                                message_lines.append(clean_line.strip())
+                        elif clean_line.strip():
+                            message_lines.append(clean_line.strip())
+                        i += 1
+
+                    message = "\n".join(message_lines) if message_lines else "Unknown error"
+                    category = self._categorize_error(message)
+
+                    errors.append(
+                        CompilationError(
+                            file_path=file_path,
+                            line=line_num,
+                            column=col_num,
+                            category=category,
+                            message=message,
+                            raw_error=f"{file_path}:{line_num}:{col_num}: {message}",
+                        )
+                    )
+            else:
+                i += 1
+
+        return errors
+
+    def _parse_ghc_errors(self, stderr: str) -> list[CompilationError]:
+        """Parse GHC-style error format (DAML ≤2.9)"""
         errors = []
 
         # Pattern: file:line:column: error/warning:
@@ -321,7 +400,6 @@ dependencies:
             else:
                 i += 1
 
-        logger.debug(f"Parsed {len(errors)} errors from compiler output")
         return errors
 
     def _categorize_error(self, error_msg: str) -> ErrorCategory:

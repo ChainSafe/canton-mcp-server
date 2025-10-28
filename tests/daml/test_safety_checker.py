@@ -35,7 +35,7 @@ class TestSafetyChecker:
         self.storage_path = Path(self.temp_dir)
 
         if DAML_AVAILABLE:
-            self.compiler = DamlCompiler()
+            self.compiler = DamlCompiler(sdk_version="2.10.2")
             self.auth_validator = AuthorizationValidator()
             self.type_verifier = TypeSafetyVerifier()
             self.audit_trail = AuditTrail(storage_path=self.storage_path)
