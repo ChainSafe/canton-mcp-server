@@ -173,3 +173,5 @@ cython_debug/
 # Local development files
 *.local
 .env.local
+.env.canton
+restart-server.sh
