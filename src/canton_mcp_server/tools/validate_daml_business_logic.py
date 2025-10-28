@@ -45,7 +45,7 @@ class ValidateDamlBusinessLogicTool(Tool[ValidateDamlParams, ValidateDamlResult]
     description = "Validate DAML code against canonical authorization patterns and business requirements"
     params_model = ValidateDamlParams
     result_model = ValidateDamlResult
-    pricing = ToolPricing(type=PricingType.FREE)
+    pricing = ToolPricing(type=PricingType.FIXED, base_price=0.005)
 
     async def execute(
         self, ctx: ToolContext[ValidateDamlParams, ValidateDamlResult]

@@ -333,6 +333,51 @@ class PaymentHandler:
         try:
             payment_dict = json.loads(safe_base64_decode(payment_header))
             payment = PaymentPayload(**payment_dict)
+            
+            # Extract payer address from payment for DCAP tracking
+            # x402 payment structure: { x402Version, scheme, network, payload: { signature, authorization: {...} } }
+            # The payer address is in payload.authorization object (EIP-712 signed message)
+            payer_address = None
+            
+            # Navigate to payload.authorization
+            payload = payment_dict.get("payload", {})
+            if isinstance(payload, dict):
+                # Check authorization object (EIP-712 message)
+                authorization = payload.get("authorization", {})
+                if isinstance(authorization, dict):
+                    payer_address = (
+                        authorization.get("from") or 
+                        authorization.get("payer") or
+                        authorization.get("sender") or
+                        authorization.get("walletAddress") or
+                        authorization.get("address")
+                    )
+                
+                # Fallback: check payload level
+                if not payer_address:
+                    payer_address = (
+                        payload.get("from") or 
+                        payload.get("payer") or
+                        payload.get("sender") or
+                        payload.get("walletAddress")
+                    )
+            
+            # Final fallback: check top level
+            if not payer_address:
+                payer_address = (
+                    payment_dict.get("from") or 
+                    payment_dict.get("payer") or
+                    payment_dict.get("sender") or
+                    payment_dict.get("walletAddress")
+                )
+            
+            if payer_address:
+                request.state.x402_payer_address = payer_address
+                logger.info(f"✅ Extracted payer address: {payer_address}")
+            else:
+                # Log more detail for debugging
+                auth_keys = list(authorization.keys()) if isinstance(authorization, dict) else 'N/A'
+                logger.warning(f"⚠️ Could not extract payer. Payload keys: {list(payload.keys()) if isinstance(payload, dict) else 'N/A'}, Authorization keys: {auth_keys}")
         except Exception as e:
             logger.warning(f"Invalid payment header: {e}")
             raise PaymentVerificationError(
