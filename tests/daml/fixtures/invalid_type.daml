@@ -1,0 +1,19 @@
+-- Invalid DAML Template: Type Error
+-- This template should FAIL compilation (type safety error)
+
+module Main where
+
+template TypeErrorIOU
+  with
+    issuer: Party
+    amount: Decimal
+  where
+    -- TYPE ERROR: signatory expects Party, not Text
+    signatory "not a party"
+    
+    choice GetAmount : Decimal
+      controller issuer
+      do
+        -- TYPE ERROR: returning wrong type
+        return "should be Decimal not Text"
+

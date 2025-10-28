@@ -1,0 +1,20 @@
+-- Invalid DAML Template: Missing Signatory
+-- This template should FAIL compilation (authorization error)
+
+module Main where
+
+template BadIOU
+  with
+    owner: Party
+    amount: Decimal
+  where
+    -- MISSING signatory! This will fail DAML compilation
+    observer owner
+    
+    choice Transfer : ContractId BadIOU
+      with
+        newOwner: Party
+      controller owner
+      do
+        create this with owner = newOwner
+
