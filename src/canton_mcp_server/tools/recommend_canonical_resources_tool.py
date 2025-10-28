@@ -56,7 +56,7 @@ class RecommendCanonicalResourcesTool(Tool[RecommendCanonicalResourcesParams, di
     name = "recommend_canonical_resources"
     description = "Recommend canonical DAML patterns, anti-patterns, and documentation based on user requirements. Acts as a 'sentinel' to intelligently map user requests to the most relevant canonical resources."
     params_model = RecommendCanonicalResourcesParams
-    pricing = ToolPricing(type=PricingType.FREE)
+    pricing = ToolPricing(type=PricingType.FIXED, base_price=0.001)
     
     def __init__(self):
         """Initialize the recommendation tool."""
@@ -144,7 +144,7 @@ class GetCanonicalOverviewTool(Tool[GetCanonicalOverviewParams, dict]):
     name = "get_canonical_resource_overview"
     description = "Get an overview of available canonical resources organized by use case, security level, and complexity."
     params_model = GetCanonicalOverviewParams
-    pricing = ToolPricing(type=PricingType.FREE)
+    pricing = ToolPricing(type=PricingType.FIXED, base_price=0.001)
     
     def __init__(self):
         """Initialize the overview tool."""

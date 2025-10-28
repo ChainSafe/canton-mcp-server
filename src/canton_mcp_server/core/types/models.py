@@ -148,12 +148,16 @@ class PaymentContext(BaseModel):
         verified: Whether payment has been verified for this request
         amount_usd: Payment amount in USD
         payment: Optional payment payload data
+        payer: Optional payer wallet address (from x402 settlement)
+        caller: Optional caller identifier (agent/user name)
     """
 
     enabled: bool
     verified: bool
     amount_usd: float = 0.0
     payment: Optional[dict] = None
+    payer: Optional[str] = None  # Wallet address from x402 settlement
+    caller: Optional[str] = None  # Agent/user identifier
 
     class Config:
         arbitrary_types_allowed = True

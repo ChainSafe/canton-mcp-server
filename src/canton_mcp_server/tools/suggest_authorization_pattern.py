@@ -50,7 +50,7 @@ class SuggestAuthorizationPatternTool(Tool[SuggestPatternParams, SuggestPatternR
     description = "Suggest DAML authorization patterns based on workflow requirements and security levels"
     params_model = SuggestPatternParams
     result_model = SuggestPatternResult
-    pricing = ToolPricing(type=PricingType.FREE)
+    pricing = ToolPricing(type=PricingType.FIXED, base_price=0.003)
 
     async def execute(
         self, ctx: ToolContext[SuggestPatternParams, SuggestPatternResult]

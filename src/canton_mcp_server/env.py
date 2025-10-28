@@ -77,6 +77,12 @@ ENV_VALUES["DCAP_MULTICAST_IP"] = os.getenv(
     "DCAP_MULTICAST_IP", ""
 )  # Must be explicitly configured
 ENV_VALUES["DCAP_PORT"] = os.getenv("DCAP_PORT", "10191")
+ENV_VALUES["DCAP_SERVER_ID"] = os.getenv("DCAP_SERVER_ID", "canton-mcp")
+ENV_VALUES["DCAP_SERVER_NAME"] = os.getenv("DCAP_SERVER_NAME", "Canton MCP Server")
+# DCAP v2.4 - Fallback values when caller/payer cannot be determined from request
+# In production, these should be extracted from X-Caller-ID header and x402 payment
+ENV_VALUES["DCAP_DEFAULT_CALLER"] = os.getenv("DCAP_DEFAULT_CALLER", "unknown-client")
+ENV_VALUES["DCAP_DEFAULT_PAYER"] = os.getenv("DCAP_DEFAULT_PAYER", "0x0000000000000000000000000000000000000000")
 
 
 def get_env(key: str, default: str = "") -> str:

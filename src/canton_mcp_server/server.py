@@ -104,10 +104,49 @@ async def lifespan(app: FastAPI):
         if count > 0:
             logger.info(f"   - {category}: {count} resources")
 
+    # Start DCAP semantic_discover broadcasting
+    broadcast_task = None
+    from canton_mcp_server.core.dcap import is_dcap_enabled, broadcast_all_tools
+    from canton_mcp_server.env import get_env, get_env_int
+    
+    if is_dcap_enabled():
+        server_url = get_env("DCAP_SERVER_URL", "")
+        if server_url:
+            # Broadcast on startup
+            broadcast_all_tools(server_url, payment_handler)
+            
+            # Start periodic broadcasting
+            interval_sec = get_env_int("DCAP_DISCOVER_INTERVAL_SEC", 300)  # Default: 5 minutes
+            
+            async def periodic_broadcast():
+                """Background task to periodically broadcast tool capabilities"""
+                while True:
+                    try:
+                        await asyncio.sleep(interval_sec)
+                        broadcast_all_tools(server_url, payment_handler)
+                    except asyncio.CancelledError:
+                        logger.info("📡 DCAP periodic broadcast task cancelled")
+                        break
+                    except Exception as e:
+                        logger.error(f"⚠️ DCAP periodic broadcast failed: {e}")
+            
+            broadcast_task = asyncio.create_task(periodic_broadcast())
+            logger.info(f"📡 DCAP semantic_discover broadcasting enabled (interval: {interval_sec}s)")
+        else:
+            logger.warning("⚠️ DCAP enabled but DCAP_SERVER_URL not configured - skipping semantic_discover")
+
     yield
 
     # Shutdown
     logger.info("Shutting down...")
+    
+    # Cancel broadcast task
+    if broadcast_task:
+        broadcast_task.cancel()
+        try:
+            await broadcast_task
+        except asyncio.CancelledError:
+            pass
     
     # Stop hot-reload file watcher if enabled
     if enable_hot_reload:

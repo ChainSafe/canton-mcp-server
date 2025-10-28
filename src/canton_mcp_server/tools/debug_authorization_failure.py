@@ -42,7 +42,7 @@ class DebugAuthorizationFailureTool(Tool[DebugAuthParams, DebugAuthResult]):
     description = "Debug DAML authorization errors with detailed analysis and suggested fixes"
     params_model = DebugAuthParams
     result_model = DebugAuthResult
-    pricing = ToolPricing(type=PricingType.FREE)
+    pricing = ToolPricing(type=PricingType.FIXED, base_price=0.002)
 
     async def execute(self, ctx: ToolContext[DebugAuthParams, DebugAuthResult]):
         """Execute authorization debugging"""

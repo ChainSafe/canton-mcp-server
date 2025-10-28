@@ -121,10 +121,24 @@ async def handle_tools_call(
         # 3. Payment Context Setup
         # =============================================================================
 
+        # Extract caller identifier from request headers (for DCAP v2.4)
+        # Agents should send their name/ID via X-Caller-ID header
+        caller = request.headers.get("X-Caller-ID")
+        
+        # If no X-Caller-ID, try to extract from User-Agent
+        if not caller:
+            user_agent = request.headers.get("User-Agent", "")
+            # Parse agent name from user-agent if it follows pattern like "AgentName/version"
+            if user_agent:
+                caller = user_agent.split("/")[0] if "/" in user_agent else user_agent
+            else:
+                caller = None  # Will use default from env
+
         payment_context = PaymentContext(
             enabled=payment_handler.enabled,
             verified=False,
             amount_usd=0.0,
+            caller=caller,
         )
 
         # Payment verification happens in server.py BEFORE calling this handler
@@ -133,6 +147,12 @@ async def handle_tools_call(
             payment_context.verified = True
             price = payment_handler.get_tool_price(tool_name, arguments)
             payment_context.amount_usd = price
+            
+            # Extract payer address from payment header (if available)
+            # This was extracted during payment verification
+            if hasattr(request.state, "x402_payer_address"):
+                payment_context.payer = request.state.x402_payer_address
+            
             logger.debug(f"✅ Payment already verified for '{tool_name}': ${price:.4f}")
 
         # =============================================================================
@@ -223,6 +243,10 @@ async def handle_tools_call(
                             request, tool_name, execution_successful
                         )
                         if settlement_data:
+                            # Update payer address from settlement (most authoritative)
+                            # This overwrites the payer from payment header with confirmed address
+                            if settlement_data.get("payer"):
+                                payment_context.payer = settlement_data.get("payer")
                             logger.info(
                                 f"💰 Payment settled for '{tool_name}': ${payment_context.amount_usd:.4f}"
                             )
@@ -240,17 +264,21 @@ async def handle_tools_call(
 
         # Send DCAP performance update (if enabled)
         if is_dcap_enabled():
+            # Calculate cost in atomic units (USDC has 6 decimals)
+            cost_atomic = int(payment_context.amount_usd * 1_000_000) if payment_context.verified else None
+            
+            # Debug log
+            logger.info(f"📊 DCAP cost calculation: ${payment_context.amount_usd} USD = {cost_atomic} atomic units")
+            
             send_perf_update(
                 tool_name=tool_name,
                 exec_ms=int(duration * 1000),  # Convert seconds to milliseconds
                 success=execution_successful,
                 args=arguments,  # Will be anonymized by DCAP module
-                cost_paid=(
-                    payment_context.amount_usd * 1_000_000
-                    if payment_context.verified
-                    else None
-                ),
+                cost_paid=cost_atomic,
                 currency="USDC",
+                caller=payment_context.caller,  # DCAP v2.4 - agent/user identifier
+                payer=payment_context.payer,  # DCAP v2.4 - wallet address
             )
 
     except Exception as e:
