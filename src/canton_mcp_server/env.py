@@ -52,12 +52,18 @@ else:
 # MCP Server Configuration
 ENV_VALUES["MCP_SERVER_URL"] = os.getenv("MCP_SERVER_URL", "http://localhost:7284")
 
-# x402 Payment Configuration
+# x402 Payment Configuration (USDC on Base Sepolia)
 ENV_VALUES["X402_ENABLED"] = os.getenv("X402_ENABLED", "false")
 ENV_VALUES["X402_WALLET_ADDRESS"] = os.getenv("X402_WALLET_ADDRESS", "")
 ENV_VALUES["X402_WALLET_PRIVATE_KEY"] = os.getenv("X402_WALLET_PRIVATE_KEY", "")
 ENV_VALUES["X402_NETWORK"] = os.getenv("X402_NETWORK", "base-sepolia")
 ENV_VALUES["X402_TOKEN"] = os.getenv("X402_TOKEN", "USDC")
+
+# Canton x402 Payment Configuration (Canton Coins on Canton Network)
+ENV_VALUES["CANTON_ENABLED"] = os.getenv("CANTON_ENABLED", "false")
+ENV_VALUES["CANTON_FACILITATOR_URL"] = os.getenv("CANTON_FACILITATOR_URL", "http://localhost:3000")
+ENV_VALUES["CANTON_PAYEE_PARTY"] = os.getenv("CANTON_PAYEE_PARTY", "")
+ENV_VALUES["CANTON_NETWORK"] = os.getenv("CANTON_NETWORK", "canton-local")
 
 # Internal API Key for payment bypass (cron jobs, internal services)
 ENV_VALUES["X402_INTERNAL_API_KEY"] = os.getenv("X402_INTERNAL_API_KEY", "")

@@ -273,3 +273,6 @@ class TestAuditTrail:
         assert restored.authorization_model.template_name == auth_model.template_name
         assert restored.blocked == entry.blocked
 
+
+
+

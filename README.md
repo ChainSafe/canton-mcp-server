@@ -385,20 +385,73 @@ DCAP_MULTICAST_IP=159.89.110.236  # UDP relay address (or use multicast like 239
 DCAP_PORT=10191
 
 # x402 Payment Configuration - DISABLED by default
+
+# Option 1: USDC on Base Sepolia (EVM)
 X402_ENABLED=false
 X402_WALLET_ADDRESS=
 X402_WALLET_PRIVATE_KEY=
 X402_NETWORK=base-sepolia
 X402_TOKEN=USDC
+
+# Option 2: Canton Coins on Canton Network
+CANTON_ENABLED=false
+CANTON_FACILITATOR_URL=http://localhost:3000
+CANTON_PAYEE_PARTY=
+CANTON_NETWORK=canton-local
 ```
 
 ### Enabling Payments
 
-To enable x402 payments for tool usage:
+The Canton MCP Server supports **dual payment options**, allowing clients to pay with either USDC or Canton Coins:
+
+#### Option 1: USDC on Base Sepolia (EVM)
+
+To enable USDC payments:
 
 1. Set `X402_ENABLED=true` in `.env.canton`
-2. Configure your wallet address and private key
-3. Set pricing in tool definitions (default: FREE)
+2. Configure your Ethereum wallet address: `X402_WALLET_ADDRESS=0x...`
+3. Optionally set private key for automated settlement: `X402_WALLET_PRIVATE_KEY=...`
+4. Set network: `X402_NETWORK=base-sepolia` (or `base-mainnet` for production)
+
+#### Option 2: Canton Coins on Canton Network
+
+To enable Canton Coin payments:
+
+1. Set `CANTON_ENABLED=true` in `.env.canton`
+2. Start your Canton x402 facilitator service (see [canton-x402-facilitator](https://github.com/your-org/canton-x402-facilitator))
+3. Configure facilitator URL: `CANTON_FACILITATOR_URL=http://localhost:3000`
+4. Set your Canton payee party ID: `CANTON_PAYEE_PARTY=ServiceProvider::12207...abc`
+5. Set network: `CANTON_NETWORK=canton-local` (or `canton-testnet`, `canton-mainnet`)
+
+#### Dual Payment Configuration
+
+You can enable **both** payment methods simultaneously. When both are enabled:
+
+- Clients receive payment requirements for **both** USDC and Canton Coins in 402 responses
+- Clients choose which payment method to use based on available funds
+- The server automatically routes verification and settlement to the correct facilitator
+- DCAP performance tracking correctly reports currency used (USDC or CC)
+
+**Example dual configuration:**
+```bash
+# Enable both payment methods
+X402_ENABLED=true
+X402_WALLET_ADDRESS=0x1234...
+X402_NETWORK=base-sepolia
+
+CANTON_ENABLED=true
+CANTON_FACILITATOR_URL=http://localhost:3000
+CANTON_PAYEE_PARTY=ServiceProvider::12207d6f70656e2d736f757263652d6c6564676572
+CANTON_NETWORK=canton-local
+```
+
+#### Pricing
+
+Set pricing in tool definitions (default: FREE). Prices are specified in USD and automatically converted:
+- **USDC**: Converted to atomic units (6 decimals) for Base Sepolia
+- **Canton Coins**: Direct 1:1 USD-to-CC mapping for ad-hoc price stability
+
+See `src/canton_mcp_server/core/pricing.py` for pricing configuration options.
 
 ## Usage
 

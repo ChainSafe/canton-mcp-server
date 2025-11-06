@@ -173,3 +173,6 @@ class TypeSafetyVerifier:
 
         return error.category in critical_categories
 
+
+
+

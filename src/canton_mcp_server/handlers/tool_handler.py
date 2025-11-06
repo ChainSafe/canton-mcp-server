@@ -264,11 +264,27 @@ async def handle_tools_call(
 
         # Send DCAP performance update (if enabled)
         if is_dcap_enabled():
-            # Calculate cost in atomic units (USDC has 6 decimals)
-            cost_atomic = int(payment_context.amount_usd * 1_000_000) if payment_context.verified else None
+            # Determine currency and cost based on payment method used
+            if payment_context.verified:
+                # Check which facilitator was used
+                facilitator_type = getattr(ctx._fastapi_request.state, "x402_facilitator_type", "evm")
+                
+                if facilitator_type == "canton":
+                    # Canton Coin payment
+                    currency = "CC"
+                    # Canton uses decimal amounts - scale to atomic for DCAP reporting
+                    cost_atomic = int(payment_context.amount_usd * 1_000_000)
+                else:
+                    # USDC payment (6 decimals)
+                    currency = "USDC"
+                    cost_atomic = int(payment_context.amount_usd * 1_000_000)
+            else:
+                currency = None
+                cost_atomic = None
             
             # Debug log
-            logger.info(f"📊 DCAP cost calculation: ${payment_context.amount_usd} USD = {cost_atomic} atomic units")
+            if cost_atomic:
+                logger.info(f"📊 DCAP cost calculation: ${payment_context.amount_usd} USD = {cost_atomic} atomic units ({currency})")
             
             send_perf_update(
                 tool_name=tool_name,
@@ -276,7 +292,7 @@ async def handle_tools_call(
                 success=execution_successful,
                 args=arguments,  # Will be anonymized by DCAP module
                 cost_paid=cost_atomic,
-                currency="USDC",
+                currency=currency,
                 caller=payment_context.caller,  # DCAP v2.4 - agent/user identifier
                 payer=payment_context.payer,  # DCAP v2.4 - wallet address
             )
