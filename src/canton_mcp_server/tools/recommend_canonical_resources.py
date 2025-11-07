@@ -6,7 +6,9 @@ based on user requirements and use cases.
 """
 
 import logging
+import os
 from typing import Dict, List, Any, Optional
+from pathlib import Path
 
 from ..core.structured_ingestion import StructuredIngestionEngine
 from ..core.resource_recommender import CanonicalResourceRecommender, RecommendationRequest
@@ -45,7 +47,8 @@ def recommend_canonical_resources(
         logger.info(f"Recommending canonical resources for use case: {use_case}")
         
         # Load and structure canonical resources
-        loader = DirectFileResourceLoader(Path("/Users/martinmaurer/Projects/canonical-daml-docs"))
+        canonical_docs_path = Path(os.environ.get("CANONICAL_DOCS_PATH", "/Users/martinmaurer/Projects/Martin/canonical-daml-docs"))
+        loader = DirectFileResourceLoader(canonical_docs_path)
         raw_resources = loader.get_all_resources()
         
         # Structure the resources
@@ -126,7 +129,8 @@ def get_canonical_resource_overview() -> ToolResult:
         logger.info("Getting canonical resource overview")
         
         # Load and structure canonical resources
-        loader = DirectFileResourceLoader(Path("/Users/martinmaurer/Projects/canonical-daml-docs"))
+        canonical_docs_path = Path(os.environ.get("CANONICAL_DOCS_PATH", "/Users/martinmaurer/Projects/Martin/canonical-daml-docs"))
+        loader = DirectFileResourceLoader(canonical_docs_path)
         raw_resources = loader.get_all_resources()
         
         # Structure the resources

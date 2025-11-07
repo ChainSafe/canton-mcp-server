@@ -175,3 +175,6 @@ cython_debug/
 .env.local
 .env.canton
 restart-server.sh
+
+# DAML audit logs (generated at runtime)
+daml_audit_logs/

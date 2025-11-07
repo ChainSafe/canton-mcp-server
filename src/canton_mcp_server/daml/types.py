@@ -119,6 +119,17 @@ class CompilationResult:
 
 
 @dataclass
+class PolicyCheckResult:
+    """Result of canonical policy checking against anti-patterns"""
+
+    matches_anti_pattern: bool
+    matched_anti_pattern_name: Optional[str] = None
+    match_reasoning: Optional[str] = None
+    suggested_alternatives: List[str] = field(default_factory=list)
+    llm_response: str = ""  # Full LLM response for audit trail
+
+
+@dataclass
 class SafetyCheckResult:
     """Gate 1 safety check result"""
 
@@ -128,6 +139,7 @@ class SafetyCheckResult:
     blocked_reason: Optional[str] = None
     safety_certificate: Optional[str] = None
     audit_id: str = ""
+    policy_check: Optional["PolicyCheckResult"] = None
 
     @property
     def is_safe(self) -> bool:
@@ -158,6 +170,9 @@ class AuditEntry:
     errors: List[CompilationError] = field(default_factory=list)
     authorization_model: Optional[AuthorizationModel] = None
     blocked: bool = False
+    policy_blocked: bool = False
+    anti_pattern_name: Optional[str] = None
+    policy_reasoning: Optional[str] = None
 
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization"""
@@ -188,6 +203,9 @@ class AuditEntry:
                 else None
             ),
             "blocked": self.blocked,
+            "policy_blocked": self.policy_blocked,
+            "anti_pattern_name": self.anti_pattern_name,
+            "policy_reasoning": self.policy_reasoning,
         }
 
     @classmethod
@@ -224,6 +242,9 @@ class AuditEntry:
             errors=errors,
             authorization_model=auth_model,
             blocked=data.get("blocked", False),
+            policy_blocked=data.get("policy_blocked", False),
+            anti_pattern_name=data.get("anti_pattern_name"),
+            policy_reasoning=data.get("policy_reasoning"),
         )
 
 
