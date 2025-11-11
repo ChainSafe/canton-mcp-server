@@ -14,8 +14,11 @@ from typing import Optional
 from .audit_trail import AuditTrail
 from .authorization_validator import AuthorizationValidator
 from .daml_compiler_integration import DamlCompiler
+from .policy_checker import check_against_policies
 from .type_safety_verifier import TypeSafetyVerifier
 from .types import CompilationStatus, SafetyCheckResult
+from ..core.resources.base import ResourceCategory
+from ..core.resources.loader import ResourceLoader, get_loader
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +42,7 @@ class SafetyChecker:
         auth_validator: Optional[AuthorizationValidator] = None,
         type_verifier: Optional[TypeSafetyVerifier] = None,
         audit_trail: Optional[AuditTrail] = None,
+        resource_loader: Optional[ResourceLoader] = None,
     ):
         """
         Initialize safety checker with validators.
@@ -48,11 +52,15 @@ class SafetyChecker:
             auth_validator: Authorization validator (creates default if None)
             type_verifier: Type safety verifier (creates default if None)
             audit_trail: Audit trail (creates default if None)
+            resource_loader: Resource loader for canonical policies (creates default if None)
         """
-        self.compiler = compiler or DamlCompiler()
+        from ..env import get_env
+        sdk_version = get_env("DAML_SDK_VERSION", "3.4.0-snapshot.20251013.0")
+        self.compiler = compiler or DamlCompiler(sdk_version=sdk_version)
         self.auth_validator = auth_validator or AuthorizationValidator()
         self.type_verifier = type_verifier or TypeSafetyVerifier()
         self.audit_trail = audit_trail or AuditTrail()
+        self.resource_loader = resource_loader or get_loader()
 
         logger.info("Safety checker initialized (Gate 1: DAML Compiler Safety)")
 
@@ -111,6 +119,44 @@ class SafetyChecker:
                 blocked_reason=blocked_reason,
                 safety_certificate=None,
                 audit_id=audit_id,
+            )
+
+        # Step 2.5: Check against canonical anti-patterns (NEW)
+        # Even if code compiles, it may match known anti-patterns
+        anti_patterns = self.resource_loader.registry.list_resources(
+            ResourceCategory.ANTI_PATTERN
+        )
+        safe_patterns = self.resource_loader.registry.list_resources(
+            ResourceCategory.PATTERN
+        )
+        
+        policy_result = await check_against_policies(
+            code, anti_patterns, safe_patterns
+        )
+        
+        if policy_result.matches_anti_pattern:
+            logger.warning(
+                f"Pattern blocked by policy: {policy_result.matched_anti_pattern_name}"
+            )
+            
+            # Log to audit trail with policy violation
+            audit_id = self.audit_trail.log_compilation(
+                code_hash=code_hash,
+                module_name=module_name,
+                result=compilation_result,
+                auth_model=None,
+                blocked=True,
+                policy_check=policy_result,
+            )
+            
+            return SafetyCheckResult(
+                passed=False,
+                compilation_result=compilation_result,
+                authorization_model=None,
+                blocked_reason=f"Matches anti-pattern: {policy_result.matched_anti_pattern_name}",
+                safety_certificate=None,
+                audit_id=audit_id,
+                policy_check=policy_result,
             )
 
         # Step 3: Extract authorization model

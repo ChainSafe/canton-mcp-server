@@ -1,0 +1,152 @@
+-- LEGITIMATE GAME PATTERNS FOR DAML
+-- These demonstrate proper authorization while maintaining fun gameplay
+
+module LegitimateGamePatterns where
+
+-- PATTERN 1: Voluntary Lock Game
+-- Players can lock their OWN funds to earn points, but can't lock others
+template VoluntaryLockGame
+  with
+    player : Party
+    lockedAmount : Int
+    unlockTime : Time
+    gameHost : Party
+  where
+    signatory player, gameHost
+    
+    -- Player voluntarily locks their own funds
+    choice ExtendLock : ContractId VoluntaryLockGame
+      with
+        newUnlockTime : Time
+      controller player
+      do
+        assert (newUnlockTime > unlockTime)
+        create this with unlockTime = newUnlockTime
+    
+    -- Player can unlock after time expires
+    choice UnlockFunds : ()
+      with
+        currentTime : Time
+      controller player
+      do
+        assert (currentTime >= unlockTime)
+        return ()
+
+
+-- PATTERN 2: Consensual Challenge Game
+-- Players can challenge each other, but both must agree
+template ChallengeGame
+  with
+    challenger : Party
+    challenged : Party
+    stake : Int
+    gameHost : Party
+    status : Text  -- "pending", "accepted", "completed"
+  where
+    signatory challenger, gameHost
+    observer challenged
+    
+    -- Challenged player must accept
+    choice AcceptChallenge : ContractId ActiveChallenge
+      controller challenged
+      do
+        create ActiveChallenge with
+          player1 = challenger
+          player2 = challenged
+          stake
+          gameHost
+    
+    -- Can decline
+    choice DeclineChallenge : ()
+      controller challenged
+      do
+        return ()
+
+
+template ActiveChallenge
+  with
+    player1 : Party
+    player2 : Party
+    stake : Int
+    gameHost : Party
+  where
+    signatory player1, player2, gameHost
+    
+    -- Game host determines winner (both players signed up for this)
+    choice DeclareWinner : ()
+      with
+        winner : Party
+      controller gameHost
+      do
+        assert (winner == player1 || winner == player2)
+        return ()
+
+
+-- PATTERN 3: Time-Based Competition
+-- Players compete without directly affecting each other
+template PlayerScore
+  with
+    player : Party
+    score : Int
+    gameHost : Party
+    gameRound : Int
+  where
+    signatory player, gameHost
+    
+    choice UpdateScore : ContractId PlayerScore
+      with
+        newScore : Int
+      controller gameHost  -- Only host can update scores
+      do
+        create this with score = newScore
+    
+    -- Player can quit anytime
+    choice QuitGame : ()
+      controller player
+      do
+        return ()
+
+
+-- PATTERN 4: Escrow with Multi-Party Release
+-- Funds are held in escrow, but release requires agreement
+template GameEscrow
+  with
+    player1 : Party
+    player2 : Party
+    player3 : Party
+    amount1 : Int
+    amount2 : Int
+    amount3 : Int
+    gameHost : Party
+  where
+    signatory player1, player2, player3, gameHost
+    
+    -- Requires ALL players to agree to release
+    choice ReleaseToWinner : ()
+      with
+        winner : Party
+        player1Agrees : Bool
+        player2Agrees : Bool
+        player3Agrees : Bool
+      controller player1, player2, player3
+      do
+        assert (player1Agrees && player2Agrees && player3Agrees)
+        assert (winner == player1 || winner == player2 || winner == player3)
+        return ()
+    
+    -- Any player can trigger full refund
+    choice RefundAll : ()
+      controller player1
+      do
+        return ()
+    
+    choice RefundAll2 : ()
+      controller player2
+      do
+        return ()
+    
+    choice RefundAll3 : ()
+      controller player3
+      do
+        return ()
+

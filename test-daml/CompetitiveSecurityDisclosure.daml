@@ -1,0 +1,267 @@
+-- COMPETITIVE SECURITY DISCLOSURE PROTOCOL
+-- A legitimate variant of "reverse bounty" that promotes responsible disclosure
+-- while maintaining competitive game theory elements
+
+module CompetitiveSecurityDisclosure where
+
+import DA.Time
+import DA.List
+
+-- Represents a security research competition for a specific project/contract
+template SecurityResearchCompetition
+  with
+    projectOwner : Party
+    judge : Party  -- Neutral third party who verifies findings
+    projectName : Text
+    bountyPool : Int
+    startTime : Time
+    endTime : Time
+    minStake : Int
+    researchers : [Party]  -- List of registered researchers
+  where
+    signatory projectOwner, judge
+    observer researchers
+    
+    -- Researcher registers for competition by staking
+    choice RegisterResearcher : ContractId SecurityResearchCompetition
+      with
+        researcher : Party
+        stake : Int
+      controller researcher, projectOwner
+      do
+        assert (stake >= minStake)
+        assert (researcher `notElem` researchers)
+        create this with researchers = researcher :: researchers
+    
+    -- Researcher submits finding (encrypted/hashed until verified)
+    choice SubmitFinding : ContractId PendingFinding
+      with
+        researcher : Party
+        findingHash : Text  -- Hash of the vulnerability details
+        severity : Text  -- "critical", "high", "medium", "low"
+        submissionTime : Time
+      controller researcher
+      do
+        assert (researcher `elem` researchers)
+        assert (submissionTime >= startTime && submissionTime <= endTime)
+        create PendingFinding with
+          competition = this
+          researcher
+          findingHash
+          severity
+          submissionTime
+          verified = False
+
+
+-- Pending finding awaiting verification
+template PendingFinding
+  with
+    competition : SecurityResearchCompetition
+    researcher : Party
+    findingHash : Text
+    severity : Text
+    submissionTime : Time
+    verified : Bool
+  where
+    signatory researcher
+    observer competition.judge, competition.projectOwner
+    
+    -- Judge verifies the finding is legitimate
+    choice VerifyFinding : ContractId VerifiedFinding
+      with
+        isValid : Bool
+        actualSeverity : Text
+        finding : Text  -- Full vulnerability details (now disclosed)
+      controller competition.judge
+      do
+        assert (not verified)
+        if isValid
+          then do
+            create VerifiedFinding with
+              competition
+              researcher
+              finding
+              severity = actualSeverity
+              submissionTime
+          else do
+            -- Invalid finding - researcher loses reputation
+            create InvalidFinding with
+              competition
+              researcher
+              reason = "Finding was not reproducible or incorrect"
+    
+    -- Researcher can disclose early for partial credit
+    choice DiscloseEarly : ContractId VerifiedFinding
+      with
+        finding : Text
+      controller researcher, competition.judge
+      do
+        create VerifiedFinding with
+          competition
+          researcher
+          finding
+          severity
+          submissionTime
+
+
+-- Verified legitimate finding
+template VerifiedFinding
+  with
+    competition : SecurityResearchCompetition
+    researcher : Party
+    finding : Text
+    severity : Text
+    submissionTime : Time
+  where
+    signatory competition.judge, researcher
+    observer competition.projectOwner
+    
+    -- Project owner awards bounty based on severity and submission order
+    choice AwardBounty : ContractId BountyPayout
+      with
+        amount : Int
+        isFirstFinder : Bool
+        bonusForSpeed : Int
+      controller competition.projectOwner, competition.judge
+      do
+        -- First finder gets largest share
+        -- Later finders still get partial rewards (prevents hiding)
+        let baseReward = if isFirstFinder then amount else (amount * 3) / 10
+        let totalReward = baseReward + bonusForSpeed
+        
+        create BountyPayout with
+          competition
+          researcher
+          amount = totalReward
+          finding
+          severity
+
+
+template BountyPayout
+  with
+    competition : SecurityResearchCompetition
+    researcher : Party
+    amount : Int
+    finding : Text
+    severity : Text
+  where
+    signatory competition.projectOwner, competition.judge, researcher
+    
+    choice ClaimBounty : ()
+      controller researcher
+      do
+        return ()
+
+
+template InvalidFinding
+  with
+    competition : SecurityResearchCompetition
+    researcher : Party
+    reason : Text
+  where
+    signatory competition.judge
+    observer researcher, competition.projectOwner
+
+
+-- VARIANT: Time-Locked Collaborative Discovery
+-- Multiple researchers can submit same finding; rewards split if submitted within threshold
+template CollaborativeDiscoveryPool
+  with
+    projectOwner : Party
+    judge : Party
+    projectName : Text
+    totalBounty : Int
+    vulnerabilityHash : Text  -- Hash of specific vulnerability
+    discoverers : [Party]
+    discoveryWindow : Int  -- Submissions within N days count as collaborative
+    firstSubmission : Optional Time
+  where
+    signatory projectOwner, judge
+    observer discoverers
+    
+    choice SubmitCollaborativeDiscovery : ContractId CollaborativeDiscoveryPool
+      with
+        researcher : Party
+        submissionTime : Time
+        proofHash : Text  -- Proof researcher independently found it
+      controller researcher, judge
+      do
+        -- Multiple researchers who find same bug within window split reward
+        let updatedFirst = case firstSubmission of
+              None -> Some submissionTime
+              Some t -> Some t
+        
+        create this with
+          discoverers = researcher :: discoverers
+          firstSubmission = updatedFirst
+    
+    choice FinalizeAndDistribute : ()
+      with
+        currentTime : Time
+      controller projectOwner, judge
+      do
+        -- Distribute bounty equally among all discoverers
+        -- This rewards both speed AND thoroughness
+        let numDiscoverers = length discoverers
+        let sharePerDiscoverer = totalBounty / numDiscoverers
+        return ()
+
+
+-- PATTERN: Staged Disclosure Protocol
+-- Researchers submit to escrow, can't access others' findings until reveal period
+template StagedDisclosureEscrow
+  with
+    projectOwner : Party
+    escrowAgent : Party
+    projectName : Text
+    submissionDeadline : Time
+    revealTime : Time
+    bountyPool : Int
+    encryptedFindings : [(Party, Text)]  -- (researcher, encrypted finding)
+  where
+    signatory projectOwner, escrowAgent
+    
+    choice SubmitEncrypted : ContractId StagedDisclosureEscrow
+      with
+        researcher : Party
+        encryptedFinding : Text
+        submissionTime : Time
+      controller researcher, escrowAgent
+      do
+        assert (submissionTime <= submissionDeadline)
+        create this with
+          encryptedFindings = (researcher, encryptedFinding) :: encryptedFindings
+    
+    choice RevealPhase : ContractId RevealedFindings
+      with
+        currentTime : Time
+        decryptedFindings : [(Party, Text, Text)]  -- (researcher, finding, severity)
+      controller escrowAgent
+      do
+        assert (currentTime >= revealTime)
+        create RevealedFindings with
+          projectOwner
+          escrowAgent
+          projectName
+          bountyPool
+          findings = decryptedFindings
+
+
+template RevealedFindings
+  with
+    projectOwner : Party
+    escrowAgent : Party
+    projectName : Text
+    bountyPool : Int
+    findings : [(Party, Text, Text)]  -- (researcher, finding, severity)
+  where
+    signatory projectOwner, escrowAgent
+    
+    choice DistributeBounties : ()
+      with
+        distribution : [(Party, Int)]  -- (researcher, amount)
+      controller projectOwner, escrowAgent
+      do
+        -- Distribute based on severity, uniqueness, and quality
+        return ()
+

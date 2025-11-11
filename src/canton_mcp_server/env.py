@@ -59,6 +59,9 @@ ENV_VALUES["X402_WALLET_PRIVATE_KEY"] = os.getenv("X402_WALLET_PRIVATE_KEY", "")
 ENV_VALUES["X402_NETWORK"] = os.getenv("X402_NETWORK", "base-sepolia")
 ENV_VALUES["X402_TOKEN"] = os.getenv("X402_TOKEN", "USDC")
 
+# DAML SDK Configuration
+ENV_VALUES["DAML_SDK_VERSION"] = os.getenv("DAML_SDK_VERSION", "3.4.0-snapshot.20251013.0")
+
 # Canton x402 Payment Configuration (Canton Coins on Canton Network)
 ENV_VALUES["CANTON_ENABLED"] = os.getenv("CANTON_ENABLED", "false")
 ENV_VALUES["CANTON_FACILITATOR_URL"] = os.getenv("CANTON_FACILITATOR_URL", "http://localhost:3000")

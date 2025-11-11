@@ -3,37 +3,82 @@ Direct File Resource Loader
 
 Scans cloned canonical repositories and serves documentation files directly
 with Git verification, eliminating the need for YAML conversion.
+
+Features:
+- Disk caching with commit-hash-based invalidation
+- Hot-reload support with git pull detection
 """
 
 import os
 import subprocess
 import logging
+import json
+import time
 from typing import Dict, List, Any, Optional
 from pathlib import Path
 from datetime import datetime
+from watchdog.events import FileSystemEventHandler
+from watchdog.observers import Observer
 
 from .github_verification import get_github_verifier
 
 logger = logging.getLogger(__name__)
 
 
+class CanonicalRepoFileHandler(FileSystemEventHandler):
+    """Handles file system events for canonical repository hot-reloading"""
+    
+    def __init__(self, loader: 'DirectFileResourceLoader'):
+        self.loader = loader
+        self.last_check = 0
+        self.check_delay = 2.0  # Debounce git pulls by 2 seconds
+    
+    def on_any_event(self, event):
+        """Handle any file system event in canonical repos"""
+        if event.is_directory:
+            return
+        
+        # Skip .git directory events
+        if ".git" in str(event.src_path):
+            return
+        
+        # Debounce rapid changes (like git pull with many files)
+        current_time = time.time()
+        if current_time - self.last_check < self.check_delay:
+            return
+        
+        self.last_check = current_time
+        
+        logger.info(f"Canonical repo file changed: {event.src_path}")
+        
+        # Check if commit hashes changed
+        try:
+            self.loader._check_and_reload_on_commit_change()
+        except Exception as e:
+            logger.error(f"Failed to check for commit changes: {e}")
+
+
 class DirectFileResourceLoader:
     """
     Loads documentation files directly from cloned canonical repositories.
     
-    This eliminates the need for YAML conversion by serving the actual
-    documentation files with Git verification.
+    Features:
+    - Disk caching with commit-hash-based invalidation
+    - Hot-reload support for git pull detection
+    - Git verification of all files
     """
     
-    def __init__(self, canonical_docs_path: Path):
+    def __init__(self, canonical_docs_path: Path, enable_hot_reload: bool = False):
         """
         Initialize the direct file loader.
         
         Args:
             canonical_docs_path: Path to cloned canonical documentation repositories
+            enable_hot_reload: Enable hot-reload file watching
         """
         self.canonical_docs_path = canonical_docs_path
         self.github_verifier = get_github_verifier()
+        self.enable_hot_reload = enable_hot_reload
         
         # Official repositories
         self.repos = {
@@ -42,9 +87,17 @@ class DirectFileResourceLoader:
             "daml-finance": canonical_docs_path / "daml-finance"
         }
         
-        # Cache for scanned resources
+        # In-memory cache for scanned resources
         self._cached_resources: Dict[str, List[Dict[str, Any]]] = {}
         self._cache_timestamp: Optional[datetime] = None
+        self._current_commit_hashes: Dict[str, str] = {}
+        
+        # Hot-reload file watcher
+        self.observer: Optional[Observer] = None
+        
+        # Disk cache directory
+        self.cache_dir = Path.home() / ".canton-mcp"
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
         
         # Allowed documentation file extensions
         self.doc_extensions = {
@@ -74,17 +127,38 @@ class DirectFileResourceLoader:
         """
         Scan all cloned repositories for documentation files.
         
+        Tries to load from disk cache first, falls back to full scan.
+        
         Args:
-            force_refresh: If True, bypass cache and rescan all repositories
+            force_refresh: If True, bypass all caches and rescan all repositories
         
         Returns:
             Dictionary mapping resource types to lists of file resources
         """
-        # Return cached results if available and not forcing refresh
+        # Return in-memory cache if available and not forcing refresh
         if not force_refresh and self._cached_resources and self._cache_timestamp:
-            logger.debug("Returning cached repository scan results")
+            logger.debug("Returning in-memory cached repository scan results")
             return self._cached_resources
         
+        # Get current commit hashes
+        commit_hashes = self._get_all_commit_hashes()
+        self._current_commit_hashes = commit_hashes
+        
+        # Try to load from disk cache (unless forcing refresh)
+        if not force_refresh:
+            cached_resources = self._load_from_disk_cache(commit_hashes)
+            if cached_resources is not None:
+                logger.info(f"Loaded {sum(len(r) for r in cached_resources.values())} resources from disk cache")
+                self._cached_resources = cached_resources
+                self._cache_timestamp = datetime.utcnow()
+                
+                # Start hot-reload watcher if enabled
+                if self.enable_hot_reload:
+                    self._start_file_watcher()
+                
+                return cached_resources
+        
+        # No cache available or forced refresh - do full scan
         logger.info("Scanning cloned repositories for documentation files...")
         
         resources = {
@@ -110,9 +184,14 @@ class DirectFileResourceLoader:
         total_resources = sum(len(resource_list) for resource_list in resources.values())
         logger.info(f"Found {total_resources} documentation files across all repositories")
         
-        # Cache the results
+        # Save to both in-memory and disk cache
         self._cached_resources = resources
         self._cache_timestamp = datetime.utcnow()
+        self._save_to_disk_cache(resources, commit_hashes)
+        
+        # Start hot-reload watcher if enabled
+        if self.enable_hot_reload:
+            self._start_file_watcher()
         
         return resources
     
@@ -136,8 +215,12 @@ class DirectFileResourceLoader:
                 logger.error(f"Could not get commit hash for {repo_name}")
                 return resources
             
-            # Scan for documentation files
+            # Scan for documentation files (skip .git directory)
             for file_path in repo_path.rglob("*"):
+                # Skip .git directory and its contents
+                if ".git" in file_path.parts:
+                    continue
+                    
                 if file_path.is_file() and self._is_documentation_file(file_path):
                     resource = self._create_file_resource(file_path, repo_path, repo_name, commit_hash)
                     if resource:
@@ -383,6 +466,152 @@ class DirectFileResourceLoader:
             logger.warning(f"Git verification found {total_errors} errors")
         
         return verification_results
+    
+    def _get_all_commit_hashes(self) -> Dict[str, str]:
+        """Get current commit hashes for all repositories."""
+        commit_hashes = {}
+        
+        for repo_name, repo_path in self.repos.items():
+            if repo_path.exists():
+                commit_hash = self._get_current_commit_hash(repo_path)
+                if commit_hash:
+                    commit_hashes[repo_name] = commit_hash
+        
+        return commit_hashes
+    
+    def _get_cache_filename(self, commit_hashes: Dict[str, str]) -> str:
+        """Generate cache filename based on commit hashes."""
+        # Sort for consistency
+        hash_parts = [f"{repo}-{commit_hashes.get(repo, 'none')[:8]}" 
+                     for repo in sorted(self.repos.keys())]
+        return f"resource-cache-{'-'.join(hash_parts)}.json"
+    
+    def _load_from_disk_cache(self, commit_hashes: Dict[str, str]) -> Optional[Dict[str, List[Dict[str, Any]]]]:
+        """
+        Load resources from disk cache if available.
+        
+        Args:
+            commit_hashes: Current commit hashes to match against
+            
+        Returns:
+            Cached resources or None if cache miss
+        """
+        cache_file = self.cache_dir / self._get_cache_filename(commit_hashes)
+        
+        if not cache_file.exists():
+            logger.debug(f"No disk cache found at {cache_file}")
+            return None
+        
+        try:
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                cache_data = json.load(f)
+            
+            # Verify commit hashes match
+            cached_hashes = cache_data.get("commit_hashes", {})
+            if cached_hashes != commit_hashes:
+                logger.warning("Cache commit hashes don't match, invalidating cache")
+                return None
+            
+            logger.info(f"✅ Loaded from disk cache: {cache_file.name}")
+            return cache_data.get("resources", {})
+            
+        except Exception as e:
+            logger.error(f"Failed to load disk cache: {e}")
+            return None
+    
+    def _save_to_disk_cache(self, resources: Dict[str, List[Dict[str, Any]]], commit_hashes: Dict[str, str]) -> None:
+        """
+        Save resources to disk cache.
+        
+        Args:
+            resources: Resources to cache
+            commit_hashes: Current commit hashes
+        """
+        cache_file = self.cache_dir / self._get_cache_filename(commit_hashes)
+        
+        try:
+            cache_data = {
+                "commit_hashes": commit_hashes,
+                "cached_at": datetime.utcnow().isoformat() + "Z",
+                "resources": resources
+            }
+            
+            with open(cache_file, 'w', encoding='utf-8') as f:
+                json.dump(cache_data, f, indent=2)
+            
+            logger.info(f"💾 Saved to disk cache: {cache_file.name}")
+            
+            # Clean up old cache files
+            self._cleanup_old_caches(cache_file)
+            
+        except Exception as e:
+            logger.error(f"Failed to save disk cache: {e}")
+    
+    def _cleanup_old_caches(self, current_cache: Path) -> None:
+        """Remove old cache files, keeping only the current one."""
+        try:
+            for cache_file in self.cache_dir.glob("resource-cache-*.json"):
+                if cache_file != current_cache:
+                    cache_file.unlink()
+                    logger.debug(f"Removed old cache file: {cache_file.name}")
+        except Exception as e:
+            logger.error(f"Failed to cleanup old caches: {e}")
+    
+    def _start_file_watcher(self) -> None:
+        """Start file system watcher for hot-reload."""
+        if self.observer is not None:
+            return  # Already started
+        
+        try:
+            self.observer = Observer()
+            event_handler = CanonicalRepoFileHandler(self)
+            
+            # Watch all canonical repositories
+            for repo_name, repo_path in self.repos.items():
+                if repo_path.exists():
+                    self.observer.schedule(event_handler, str(repo_path), recursive=True)
+                    logger.debug(f"Watching {repo_name} for changes")
+            
+            self.observer.start()
+            logger.info("🔥 Started hot-reload watcher for canonical repositories")
+            
+        except Exception as e:
+            logger.error(f"Failed to start file watcher: {e}")
+            self.observer = None
+    
+    def stop_file_watcher(self) -> None:
+        """Stop the file system watcher."""
+        if self.observer is not None:
+            self.observer.stop()
+            self.observer.join()
+            self.observer = None
+            logger.info("Stopped hot-reload watcher")
+    
+    def _check_and_reload_on_commit_change(self) -> None:
+        """Check if commits changed and reload if necessary."""
+        # Get current commit hashes
+        new_commit_hashes = self._get_all_commit_hashes()
+        
+        # Compare with stored hashes
+        if new_commit_hashes != self._current_commit_hashes:
+            changed_repos = []
+            for repo_name in self.repos.keys():
+                old_hash = self._current_commit_hashes.get(repo_name, "")
+                new_hash = new_commit_hashes.get(repo_name, "")
+                if old_hash != new_hash:
+                    changed_repos.append(f"{repo_name}({old_hash[:8]}→{new_hash[:8]})")
+            
+            logger.info(f"📦 Commit hashes changed: {', '.join(changed_repos)}")
+            logger.info("🔄 Reloading canonical resources...")
+            
+            # Clear caches and rescan
+            self._cached_resources = {}
+            self._cache_timestamp = None
+            
+            # Rescan repositories (will save new cache)
+            self.scan_repositories(force_refresh=True)
+            
+            logger.info("✅ Resources reloaded after git pull")
     
     def get_structured_resources(self) -> Dict[str, List[Dict[str, Any]]]:
         """

@@ -11,7 +11,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
-from .types import AuditEntry, AuthorizationModel, CompilationResult, CompilationStatus
+from .types import (
+    AuditEntry,
+    AuthorizationModel,
+    CompilationResult,
+    CompilationStatus,
+    PolicyCheckResult,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +56,7 @@ class AuditTrail:
         result: CompilationResult,
         auth_model: Optional[AuthorizationModel],
         blocked: bool,
+        policy_check: Optional[PolicyCheckResult] = None,
     ) -> str:
         """
         Log compilation attempt to audit trail.
@@ -60,12 +67,23 @@ class AuditTrail:
             result: Compilation result
             auth_model: Extracted authorization model (if successful)
             blocked: Whether pattern was blocked
+            policy_check: Policy check result (if policy checking was performed)
 
         Returns:
             audit_id: Unique ID for this audit entry
         """
         audit_id = str(uuid.uuid4())
         timestamp = datetime.utcnow()
+
+        # Extract policy violation details if present
+        policy_blocked = False
+        anti_pattern_name = None
+        policy_reasoning = None
+        
+        if policy_check and policy_check.matches_anti_pattern:
+            policy_blocked = True
+            anti_pattern_name = policy_check.matched_anti_pattern_name
+            policy_reasoning = policy_check.match_reasoning
 
         entry = AuditEntry(
             audit_id=audit_id,
@@ -76,15 +94,23 @@ class AuditTrail:
             errors=result.errors,
             authorization_model=auth_model,
             blocked=blocked,
+            policy_blocked=policy_blocked,
+            anti_pattern_name=anti_pattern_name,
+            policy_reasoning=policy_reasoning,
         )
 
         # Write to JSON file
         self._write_entry(entry)
 
-        logger.info(
+        log_msg = (
             f"Audit logged: {audit_id} (status: {result.status.value}, "
-            f"blocked: {blocked}, errors: {len(result.errors)})"
+            f"blocked: {blocked}, errors: {len(result.errors)}"
         )
+        if policy_blocked:
+            log_msg += f", policy_blocked: {anti_pattern_name}"
+        log_msg += ")"
+        
+        logger.info(log_msg)
 
         return audit_id
 
@@ -228,6 +254,7 @@ class AuditTrail:
                 continue
 
         logger.info(f"Cleanup complete: deleted {deleted} old audit logs")
+
 
 
 

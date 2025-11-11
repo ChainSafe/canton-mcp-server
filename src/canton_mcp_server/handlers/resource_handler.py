@@ -34,9 +34,13 @@ def get_direct_loader() -> DirectFileResourceLoader:
     global _direct_loader
     
     if _direct_loader is None:
-        # Initialize with canonical docs path (relative to project root)
-        canonical_docs_path = Path(os.environ.get("CANONICAL_DOCS_PATH", "../canonical-daml-docs"))  # Load from env var
-        _direct_loader = DirectFileResourceLoader(canonical_docs_path)
+        # Initialize with canonical docs path from environment or default
+        canonical_docs_path = Path(os.environ.get("CANONICAL_DOCS_PATH", "../../canonical-daml-docs"))
+        
+        # Check if hot-reload is enabled
+        enable_hot_reload = os.environ.get("CANTON_HOT_RELOAD", "false").lower() == "true"
+        
+        _direct_loader = DirectFileResourceLoader(canonical_docs_path, enable_hot_reload=enable_hot_reload)
     
     return _direct_loader
 
@@ -121,30 +125,17 @@ def handle_resources_read(uri: str) -> ReadResourceResult:
     if not resource:
         raise ValueError(f"Direct file resource not found: {uri}")
     
-    # Get file content directly
-    content_text = resource.get("content", "")
+    # Serialize resource content as JSON
+    content_text = json.dumps(resource, indent=2)
     
-    # Determine MIME type based on file extension
-    file_extension = resource.get("file_extension", "")
-    if file_extension == ".md":
-        mime_type = "text/markdown"
-    elif file_extension == ".rst":
-        mime_type = "text/x-rst"
-    elif file_extension == ".daml":
-        mime_type = "text/x-daml"
-    elif file_extension in [".yaml", ".yml"]:
-        mime_type = "text/yaml"
-    else:
-        mime_type = "text/plain"
-    
-    # Create resource contents with direct file metadata
+    # Create resource contents with Git verification metadata
     resource_contents = TextResourceContents(
         uri=uri,
         text=content_text,
-        mime_type=mime_type
+        mime_type="application/json"
     )
     
-    logger.info(f"Read direct file resource: {uri} (repo: {resource.get('source_repo', 'unknown')}, file: {resource.get('file_path', 'unknown')})")
+    logger.info(f"Read direct file resource: {uri} (hash: {resource.get('canonical_hash', 'unknown')})")
     return ReadResourceResult(contents=[resource_contents])
 
 
@@ -185,7 +176,7 @@ def handle_resources_subscribe(uri: str) -> Dict[str, Any]:
         raise ValueError(f"Direct file resource not found: {uri}")
     
     # TODO: Implement actual subscription mechanism for direct file resources
-    logger.info(f"Subscribed to direct file resource: {uri} (repo: {resource.get('source_repo', 'unknown')})")
+    logger.info(f"Subscribed to direct file resource: {uri} (hash: {resource.get('canonical_hash', 'unknown')})")
     return {}
 
 

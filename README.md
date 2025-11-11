@@ -32,12 +32,93 @@ A **DAML-Safe by Construction** development platform that generates provably saf
 - **HTTP+SSE Transport**: Streaming support with Server-Sent Events
 - **Type-Safe Tools**: Fully typed parameters and results using Pydantic models
 
+## Prerequisites
+
+### Required: Canonical DAML Documentation Repositories
+
+**⚠️ CRITICAL**: The Canton MCP Server requires access to official DAML documentation repositories to function. The server loads canonical patterns, anti-patterns, and documentation directly from these repos.
+
+#### 1. Clone the Official Repositories
+
+Clone these three repositories into a directory called `canonical-daml-docs`:
+
+```bash
+# Navigate to your projects directory (e.g., where you'll clone canton-mcp-server)
+cd /path/to/your/projects
+
+# Create and populate canonical-daml-docs directory
+mkdir canonical-daml-docs
+cd canonical-daml-docs
+
+# Clone the three official repositories
+git clone https://github.com/digital-asset/daml.git
+git clone https://github.com/digital-asset/canton.git
+git clone https://github.com/digital-asset/daml-finance.git
+
+cd ..
+```
+
+**Expected directory structure:**
+
+**Option A** (common setup):
+```
+your-projects/
+├── canonical-daml-docs/
+│   ├── daml/                    # Official DAML SDK
+│   ├── canton/                  # Canton blockchain
+│   └── daml-finance/            # DAML Finance libraries
+└── servers/
+    └── canton-mcp-server/       # This repository (default: ../../canonical-daml-docs)
+```
+
+**Option B** (flat structure):
+```
+your-projects/
+├── canonical-daml-docs/
+│   ├── daml/
+│   ├── canton/
+│   └── daml-finance/
+└── canton-mcp-server/           # This repository (set CANONICAL_DOCS_PATH=../canonical-daml-docs)
+```
+
+#### 2. Configure the Path
+
+The server looks for canonical docs in `../../canonical-daml-docs` by default (two directories up).
+
+This matches **Option A** above. For **Option B** or custom setups, set the `CANONICAL_DOCS_PATH` environment variable.
+
+**If your directory structure is different**, set the `CANONICAL_DOCS_PATH` environment variable:
+
+```bash
+# Option 1: Set in .env.canton file
+echo "CANONICAL_DOCS_PATH=/absolute/path/to/canonical-daml-docs" >> .env.canton
+
+# Option 2: Set in your shell
+export CANONICAL_DOCS_PATH=/absolute/path/to/canonical-daml-docs
+
+# Option 3: Use relative path
+export CANONICAL_DOCS_PATH=../../some-other-location/canonical-daml-docs
+```
+
+#### 3. Verify Setup
+
+After starting the server, check the logs for:
+```
+✅ Loaded canonical resources from: /path/to/canonical-daml-docs
+   - DAML: X files
+   - Canton: Y files  
+   - DAML Finance: Z files
+```
+
+**Without these repositories, resource recommendation tools will not work!**
+
 ## Installation
 
-### Prerequisites
+### System Requirements
 
 - Python 3.10 or higher
 - uv (recommended) or pip
+- Git (for cloning canonical repositories)
 
 ### Using uv (recommended)
 
@@ -103,7 +184,7 @@ docker-compose logs -f canton-mcp-server
 docker-compose restart canton-mcp-server
 ```
 
-**Note**: The Docker setup mounts source code for development but bakes resources into the image. If you modify files in `resources/`, rebuild the image with `docker-compose up -d --build`.
+**Note**: The Docker setup mounts source code for development. The server loads canonical resources from the `canonical-daml-docs` directory (see Prerequisites section).
 
 ### MCP Test Container
 
@@ -777,7 +858,7 @@ Use these contracts to test the MCP tools:
 
 ## Resource Schemas
 
-The Canton MCP Server uses JSON schemas to validate canonical resource files. All resource files must conform to their respective schemas:
+The Canton MCP Server uses JSON schemas to validate resource files from the canonical DAML repositories. These schemas define the structure for patterns, anti-patterns, rules, and documentation extracted from the official repositories:
 
 ### Pattern Schema (`schemas/pattern.schema.json`)
 - **Required fields**: `name`, `version`, `description`, `tags`, `author`, `created_at`, `pattern_type`, `daml_template`, `authorization_requirements`, `when_to_use`, `when_not_to_use`, `security_considerations`, `test_cases`

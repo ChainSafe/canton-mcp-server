@@ -18,6 +18,7 @@ from .types import (
     CompilationError,
     AuthorizationModel,
     CompilationResult,
+    PolicyCheckResult,
     SafetyCheckResult,
     AuditEntry,
 )
@@ -35,6 +36,7 @@ __all__ = [
     "CompilationError",
     "AuthorizationModel",
     "CompilationResult",
+    "PolicyCheckResult",
     "SafetyCheckResult",
     "AuditEntry",
     # Classes
@@ -44,6 +46,7 @@ __all__ = [
     "TypeSafetyVerifier",
     "AuditTrail",
 ]
+
 
 
 

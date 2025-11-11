@@ -6,6 +6,7 @@ MCP tool for recommending canonical resources based on user requirements.
 
 import logging
 import os
+import re
 from typing import Dict, List, Any, Optional
 from pathlib import Path
 
@@ -26,10 +27,10 @@ class RecommendCanonicalResourcesParams(MCPModel):
     """Parameters for canonical resource recommendations"""
     
     use_case: str = Field(
-        description="The primary use case (e.g., 'asset_management', 'financial_instruments', 'governance', 'identity_management', 'supply_chain', 'basic_templates')"
+        description="The primary use case. Accepts both snake_case and camelCase. Examples: 'asset_management' or 'assetManagement', 'financial_instruments' or 'financialInstruments', 'governance', 'identity_management', 'supply_chain', 'basic_templates'"
     )
     description: str = Field(
-        description="Detailed description of what you're trying to build"
+        description="Detailed description of what you're trying to build. Be specific! Good: 'hedge fund with trading strategies and portfolio rebalancing'. Bad: 'a hedge fund'. Include key concepts, workflows, and domain terms for better matches."
     )
     security_level: Optional[str] = Field(
         default=None,
@@ -61,7 +62,9 @@ class RecommendCanonicalResourcesTool(Tool[RecommendCanonicalResourcesParams, di
     def __init__(self):
         """Initialize the recommendation tool."""
         super().__init__()
-        self.loader = DirectFileResourceLoader(Path(os.environ.get("CANONICAL_DOCS_PATH", "../canonical-daml-docs")))
+        # Use environment variable for path, falling back to this machine's default
+        canonical_docs_path = Path(os.environ.get("CANONICAL_DOCS_PATH", "../../canonical-daml-docs"))
+        self.loader = DirectFileResourceLoader(canonical_docs_path)
         self._structured_resources = None
         self._recommender = None
     
@@ -75,16 +78,36 @@ class RecommendCanonicalResourcesTool(Tool[RecommendCanonicalResourcesParams, di
             self._recommender = CanonicalResourceRecommender(self._structured_resources)
             logger.info(f"Loaded {sum(len(resources) for resources in self._structured_resources.values())} structured resources")
     
+    def _normalize_use_case(self, use_case: str) -> str:
+        """
+        Normalize use_case to snake_case format.
+        
+        Handles both camelCase and snake_case input from users.
+        Examples:
+            "assetManagement" -> "asset_management"
+            "asset_management" -> "asset_management"
+            "financialInstruments" -> "financial_instruments"
+        """
+        # Convert camelCase to snake_case
+        # Insert underscore before uppercase letters that follow lowercase letters
+        s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', use_case)
+        # Insert underscore before uppercase letters that follow lowercase or uppercase letters
+        s2 = re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1)
+        return s2.lower()
+    
     async def execute(self, ctx: ToolContext[RecommendCanonicalResourcesParams, dict]):
         """Execute the recommendation tool."""
         try:
             self._ensure_structured_resources()
             
-            logger.info(f"Recommending resources for use case: {ctx.params.use_case}")
+            # Normalize use_case to snake_case (handle both formats from users)
+            use_case_normalized = self._normalize_use_case(ctx.params.use_case)
+            
+            logger.info(f"Recommending resources for use case: {use_case_normalized} (original: {ctx.params.use_case})")
             
             # Create recommendation request
             request = RecommendationRequest(
-                use_case=ctx.params.use_case,
+                use_case=use_case_normalized,
                 description=ctx.params.description,
                 security_level=ctx.params.security_level,
                 complexity_level=ctx.params.complexity_level,
@@ -96,7 +119,16 @@ class RecommendCanonicalResourcesTool(Tool[RecommendCanonicalResourcesParams, di
             recommendations = self._recommender.recommend_resources(request)
             
             if not recommendations:
-                yield ctx.error(ErrorCodes.UNAVAILABLE_RESOURCES, "No relevant canonical resources found for your requirements. Try adjusting your use case or constraints.")
+                available_use_cases = list(self._structured_resources.keys())
+                error_msg = (
+                    f"No relevant canonical resources found for use case: '{use_case_normalized}'.\n\n"
+                    f"Available use cases: {', '.join(available_use_cases)}\n\n"
+                    f"Try:\n"
+                    f"1. Use one of the available use cases listed above\n"
+                    f"2. Adjust your security_level or complexity_level requirements\n"
+                    f"3. Broaden your description to match more resources"
+                )
+                yield ctx.error(ErrorCodes.UNAVAILABLE_RESOURCES, error_msg)
                 return
             
             # Format recommendations
@@ -149,7 +181,9 @@ class GetCanonicalOverviewTool(Tool[GetCanonicalOverviewParams, dict]):
     def __init__(self):
         """Initialize the overview tool."""
         super().__init__()
-        self.loader = DirectFileResourceLoader(Path("/Users/martinmaurer/Projects/canonical-daml-docs"))
+        # Use environment variable for path, falling back to this machine's default
+        canonical_docs_path = Path(os.environ.get("CANONICAL_DOCS_PATH", "../../canonical-daml-docs"))
+        self.loader = DirectFileResourceLoader(canonical_docs_path)
         self._structured_resources = None
         self._recommender = None
     
