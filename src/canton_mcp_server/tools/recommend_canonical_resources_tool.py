@@ -62,7 +62,7 @@ class RecommendCanonicalResourcesTool(Tool[RecommendCanonicalResourcesParams, di
         """Initialize the recommendation tool."""
         super().__init__()
         # Use environment variable for path, falling back to this machine's default
-        canonical_docs_path = Path(os.environ.get("CANONICAL_DOCS_PATH", "/Users/martinmaurer/Projects/Martin/canonical-daml-docs"))
+        canonical_docs_path = Path(os.environ.get("CANONICAL_DOCS_PATH", "../../canonical-daml-docs"))
         self.loader = DirectFileResourceLoader(canonical_docs_path)
         self._structured_resources = None
         self._recommender = None
@@ -152,7 +152,7 @@ class GetCanonicalOverviewTool(Tool[GetCanonicalOverviewParams, dict]):
         """Initialize the overview tool."""
         super().__init__()
         # Use environment variable for path, falling back to this machine's default
-        canonical_docs_path = Path(os.environ.get("CANONICAL_DOCS_PATH", "/Users/martinmaurer/Projects/Martin/canonical-daml-docs"))
+        canonical_docs_path = Path(os.environ.get("CANONICAL_DOCS_PATH", "../../canonical-daml-docs"))
         self.loader = DirectFileResourceLoader(canonical_docs_path)
         self._structured_resources = None
         self._recommender = None

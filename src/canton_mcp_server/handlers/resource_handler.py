@@ -35,7 +35,7 @@ def get_direct_loader() -> DirectFileResourceLoader:
     
     if _direct_loader is None:
         # Initialize with canonical docs path from environment or default
-        canonical_docs_path = Path(os.environ.get("CANONICAL_DOCS_PATH", "/Users/martinmaurer/Projects/Martin/canonical-daml-docs"))
+        canonical_docs_path = Path(os.environ.get("CANONICAL_DOCS_PATH", "../../canonical-daml-docs"))
         
         # Check if hot-reload is enabled
         enable_hot_reload = os.environ.get("CANTON_HOT_RELOAD", "false").lower() == "true"

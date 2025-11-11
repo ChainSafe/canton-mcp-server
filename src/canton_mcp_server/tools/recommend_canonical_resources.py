@@ -47,7 +47,7 @@ def recommend_canonical_resources(
         logger.info(f"Recommending canonical resources for use case: {use_case}")
         
         # Load and structure canonical resources
-        canonical_docs_path = Path(os.environ.get("CANONICAL_DOCS_PATH", "/Users/martinmaurer/Projects/Martin/canonical-daml-docs"))
+        canonical_docs_path = Path(os.environ.get("CANONICAL_DOCS_PATH", "../../canonical-daml-docs"))
         loader = DirectFileResourceLoader(canonical_docs_path)
         raw_resources = loader.get_all_resources()
         
@@ -129,7 +129,7 @@ def get_canonical_resource_overview() -> ToolResult:
         logger.info("Getting canonical resource overview")
         
         # Load and structure canonical resources
-        canonical_docs_path = Path(os.environ.get("CANONICAL_DOCS_PATH", "/Users/martinmaurer/Projects/Martin/canonical-daml-docs"))
+        canonical_docs_path = Path(os.environ.get("CANONICAL_DOCS_PATH", "../../canonical-daml-docs"))
         loader = DirectFileResourceLoader(canonical_docs_path)
         raw_resources = loader.get_all_resources()
         
