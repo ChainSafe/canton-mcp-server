@@ -52,7 +52,12 @@ class ValidateDamlBusinessLogicTool(Tool[ValidateDamlParams, ValidateDamlResult]
     """Tool for validating DAML business logic against authorization patterns"""
 
     name = "validate_daml_business_logic"
-    description = "Validate DAML code against canonical authorization patterns and business requirements. Uses Gate 1 safety checks with canonical anti-pattern enforcement."
+    description = (
+        "⚠️ REQUIRED: Validate DAML code through Gate 1 BEFORE writing files. "
+        "Gate 1 prevents unsafe authorization patterns by checking: (1) DAML compilation, "
+        "(2) canonical anti-pattern matching, (3) authorization model validity. "
+        "NEVER write DAML code without validating first. If validation fails, suggest safe alternatives."
+    )
     params_model = ValidateDamlParams
     result_model = ValidateDamlResult
     pricing = ToolPricing(type=PricingType.FIXED, base_price=0.005)

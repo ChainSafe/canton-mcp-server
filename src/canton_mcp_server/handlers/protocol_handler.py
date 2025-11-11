@@ -15,6 +15,8 @@ from ..core import RequestManager
 from ..core.types import (
     ListPromptsResult,
     ListResourcesResult,
+    Prompt,
+    PromptArgument,
 )
 
 logger = logging.getLogger(__name__)
@@ -46,10 +48,19 @@ async def handle_initialize(params: dict) -> dict:
 
     return {
         "protocolVersion": "2025-06-18",
-        "serverInfo": {"name": "canton-mcp-server", "version": "0.1.0"},
+        "serverInfo": {
+            "name": "canton-mcp-server",
+            "version": "0.1.0",
+            "description": (
+                "Canton DAML MCP Server with Gate 1 Security Enforcement. "
+                "Validates DAML smart contracts against canonical authorization patterns "
+                "before allowing code creation. Always validate through Gate 1 first."
+            )
+        },
         "capabilities": {
             "tools": {"listChanged": False},
             "resources": {"subscribe": False, "listChanged": False},
+            "prompts": {"listChanged": False},
             "logging": {},
         },
     }
@@ -171,14 +182,45 @@ def handle_prompts_list() -> ListPromptsResult:
     Handle prompts/list request.
 
     Returns list of available prompts/templates.
-    Currently returns empty list.
 
     Returns:
-        ListPromptsResult with empty prompts list
-
-    TODO: Implement actual prompts
-    - Strategy analysis prompts
-    - Market analysis prompts
-    - Trading decision prompts
+        ListPromptsResult with available prompts including Gate 1 validation instructions
     """
-    return ListPromptsResult(prompts=[])
+    prompts = [
+        Prompt(
+            name="gate1-daml-validation",
+            description=(
+                "CRITICAL SECURITY INSTRUCTION: Always validate DAML code through Gate 1 "
+                "BEFORE writing any files. This prevents unsafe authorization patterns from "
+                "being created. Use validate_daml_business_logic tool to check code, and if "
+                "validation fails, inform the user why and suggest safe alternatives. "
+                "Never write DAML code that fails Gate 1 validation to the filesystem."
+            ),
+            arguments=None
+        ),
+        Prompt(
+            name="daml-best-practices",
+            description=(
+                "When working with DAML code: "
+                "1. Always define signatories (who authorizes contract creation) "
+                "2. Controllers must be signatories or observers "
+                "3. Use 'ensure' clauses for business logic validation "
+                "4. Add observers for parties who need visibility "
+                "5. Consider using two-step patterns (propose/accept) for transfers "
+                "6. Validate through Gate 1 before writing files"
+            ),
+            arguments=None
+        ),
+        Prompt(
+            name="canonical-patterns-first",
+            description=(
+                "Before creating new DAML patterns, search the canonical resource library "
+                "using recommend_canonical_resources tool. With 30k+ verified patterns from "
+                "the official DAML SDK, there's likely a safe, tested pattern that fits your "
+                "use case. This saves time and ensures you're following best practices."
+            ),
+            arguments=None
+        )
+    ]
+    
+    return ListPromptsResult(prompts=prompts)
