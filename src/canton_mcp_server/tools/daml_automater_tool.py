@@ -101,7 +101,7 @@ class DamlAutomaterTool(Tool[DamlAutomaterParams, DamlAutomaterResult]):
         yield ctx.text(f"\n⚠️  This feature is under construction.")
         yield ctx.text(f"\nPlease contact the infrastructure team for automation support.")
         
-        yield DamlAutomaterResult(
+        yield ctx.structured(DamlAutomaterResult(
             success=False,
             action=action,
             message=f"DAML Automater is under construction. Action '{action}' not yet implemented.",
@@ -111,7 +111,7 @@ class DamlAutomaterTool(Tool[DamlAutomaterParams, DamlAutomaterResult]):
                 "status": "placeholder",
                 "note": "Contact infrastructure team for implementation details"
             }
-        )
+        ))
 
 
 # TODO for implementing colleague:

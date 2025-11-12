@@ -201,13 +201,13 @@ class DamlReasonTool(Tool[DamlReasonParams, DamlReasonResult]):
             yield ctx.text(f"📚 Based on your intent: '{business_intent}'")
             yield ctx.text(f"\nI recommend exploring these canonical patterns:\n")
             
-            yield DamlReasonResult(
+            yield ctx.structured(DamlReasonResult(
                 action="suggest_patterns",
                 valid=False,
                 business_intent=business_intent,
                 recommended_patterns=formatted_patterns,
                 reasoning="No code provided - recommending relevant canonical patterns to start from"
-            )
+            ))
             return
 
         # CASE 2: Code provided - validate it
@@ -224,7 +224,7 @@ class DamlReasonTool(Tool[DamlReasonParams, DamlReasonResult]):
         if safety_result.passed and not safety_result.should_delegate:
             logger.info(f"✅ Code validation passed (confidence: {safety_result.confidence:.2f})")
             
-            yield DamlReasonResult(
+            yield ctx.structured(DamlReasonResult(
                 action="approved",
                 valid=True,
                 confidence=safety_result.confidence,
@@ -235,14 +235,14 @@ class DamlReasonTool(Tool[DamlReasonParams, DamlReasonResult]):
                 recommended_patterns=[],
                 reasoning=f"Code validated successfully with {safety_result.confidence:.0%} confidence. "
                          f"Authorization model extracted and verified. Ready to use."
-            )
+            ))
             return
         
         # CASE 2b: Low confidence - delegate
         if safety_result.should_delegate:
             logger.warning(f"⚠️  Delegation required: {safety_result.delegation_reason}")
             
-            yield DamlReasonResult(
+            yield ctx.structured(DamlReasonResult(
                 action="delegate",
                 valid=False,
                 confidence=safety_result.confidence,
@@ -253,7 +253,7 @@ class DamlReasonTool(Tool[DamlReasonParams, DamlReasonResult]):
                 delegation_reason=safety_result.delegation_reason,
                 reasoning=f"Code complexity exceeds reliable analysis threshold. "
                          f"Consider simplifying or using canonical patterns."
-            )
+            ))
             return
         
         # CASE 2c: Validation failed - provide issues + pattern recommendations
@@ -292,7 +292,7 @@ class DamlReasonTool(Tool[DamlReasonParams, DamlReasonResult]):
                 "use_case": rec.use_case_match
             })
         
-        yield DamlReasonResult(
+        yield ctx.structured(DamlReasonResult(
             action="suggest_edits",
             valid=False,
             confidence=safety_result.confidence,
@@ -302,7 +302,7 @@ class DamlReasonTool(Tool[DamlReasonParams, DamlReasonResult]):
             business_intent=business_intent,
             recommended_patterns=formatted_patterns,
             reasoning="Code validation failed. Review issues and consider using recommended canonical patterns."
-        )
+        ))
 
     def _extract_module_name(self, daml_code: str) -> Optional[str]:
         """Extract module name from DAML code"""
