@@ -1,0 +1,135 @@
+-- Supply Chain Shipment Tracking System
+-- Based on CarbonV2 pattern - adapted for multi-party shipment verification
+
+module ShipmentTracking where
+
+-- Core shipment tracking template
+template Shipment
+  with
+    shipper: Party
+    carrier: Party
+    receiver: Party
+    verifiers: [Party]
+    shipmentId: Text
+    contents: Text
+    origin: Text
+    destination: Text
+    currentLocation: Text
+    lastUpdate: Time
+  where
+    signatory shipper, carrier
+    observer receiver :: verifiers
+    
+    -- Third-party verifier adds certification
+    choice AddVerification : ContractId VerifiedShipment
+      with
+        verifier: Party
+        verificationNotes: Text
+      controller verifier
+      do
+        assertMsg "Verifier must be authorized" (verifier `elem` verifiers)
+        create VerifiedShipment with
+          shipper
+          carrier
+          receiver
+          verifiedBy = verifier
+          shipmentId
+          contents
+          origin
+          destination
+          currentLocation
+          lastUpdate
+          verificationNotes
+    
+    -- Carrier updates location
+    choice UpdateLocation : ContractId Shipment
+      with
+        newLocation: Text
+        timestamp: Time
+      controller carrier
+      do
+        create this with 
+          currentLocation = newLocation
+          lastUpdate = timestamp
+    
+    -- Mark as delivered
+    choice CompleteDelivery : ContractId DeliveredShipment
+      with
+        deliveryTime: Time
+        receiverSignature: Text
+      controller carrier, receiver
+      do
+        create DeliveredShipment with
+          shipper
+          carrier
+          receiver
+          shipmentId
+          contents
+          origin
+          destination
+          deliveryTime
+          receiverSignature
+
+
+-- Shipment with third-party verification
+template VerifiedShipment
+  with
+    shipper: Party
+    carrier: Party
+    receiver: Party
+    verifiedBy: Party
+    shipmentId: Text
+    contents: Text
+    origin: Text
+    destination: Text
+    currentLocation: Text
+    lastUpdate: Time
+    verificationNotes: Text
+  where
+    signatory shipper, carrier, verifiedBy
+    observer receiver
+    
+    -- Carrier can still update location
+    choice UpdateVerifiedLocation : ContractId VerifiedShipment
+      with
+        newLocation: Text
+        timestamp: Time
+      controller carrier
+      do
+        create this with 
+          currentLocation = newLocation
+          lastUpdate = timestamp
+    
+    -- Mark as delivered
+    choice CompleteVerifiedDelivery : ContractId DeliveredShipment
+      with
+        deliveryTime: Time
+        receiverSignature: Text
+      controller carrier, receiver
+      do
+        create DeliveredShipment with
+          shipper
+          carrier
+          receiver
+          shipmentId
+          contents
+          origin
+          destination
+          deliveryTime
+          receiverSignature
+
+
+-- Successfully delivered shipment (immutable record)
+template DeliveredShipment
+  with
+    shipper: Party
+    carrier: Party
+    receiver: Party
+    shipmentId: Text
+    contents: Text
+    origin: Text
+    destination: Text
+    deliveryTime: Time
+    receiverSignature: Text
+  where
+    signatory shipper, carrier, receiver
