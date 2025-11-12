@@ -42,15 +42,16 @@ class CanonicalResourceRecommender:
     relevant canonical patterns, anti-patterns, and documentation.
     """
     
-    def __init__(self, structured_resources: Dict[str, List[StructuredResource]]):
+    def __init__(self, structured_resources: Dict[str, List[StructuredResource]], enrichment_engine=None):
         """
         Initialize the recommender with structured resources.
         
         Args:
             structured_resources: Resources organized by use case
+            enrichment_engine: Optional LLMEnrichmentEngine for enriched metadata
         """
         self.structured_resources = structured_resources
-        self.ingestion_engine = StructuredIngestionEngine()
+        self.ingestion_engine = StructuredIngestionEngine(enrichment_engine=enrichment_engine)
         
         # Build search index for better recommendations
         self._build_search_index()
@@ -210,14 +211,41 @@ class CanonicalResourceRecommender:
         
         # Score based on description keywords (BOOSTED - now more important!)
         description_keywords = self._extract_keywords_from_text(request.description)
-        # Also check resource content, not just keywords
-        resource_text = ' '.join(resource.keywords) + ' ' + resource.content[:500]
+        
+        # Build searchable text from enriched metadata if available, otherwise fallback
+        searchable_parts = []
+        
+        # Use enriched summary if available (much better for contextual matching)
+        if resource.summary:
+            searchable_parts.append(resource.summary.lower())
+            reasoning_parts.append("Has enriched summary")
+        
+        # Use enriched domain concepts if available
+        if resource.domain_concepts:
+            searchable_parts.append(' '.join(resource.domain_concepts).lower())
+            reasoning_parts.append(f"Has {len(resource.domain_concepts)} domain concepts")
+        
+        # Fallback to keywords and content sample
+        searchable_parts.append(' '.join(resource.keywords).lower())
+        searchable_parts.append(resource.content[:500].lower())
+        
+        resource_text = ' '.join(searchable_parts)
         keyword_matches = sum(1 for keyword in description_keywords if keyword.lower() in resource_text.lower())
+        
         if keyword_matches > 0:
             # Increased score: 0.15 per keyword match, max 0.6
             keyword_score = min(0.6, keyword_matches * 0.15)
             score += keyword_score
             reasoning_parts.append(f"Matches {keyword_matches} keywords from description")
+        
+        # Bonus for domain concept matches (enriched metadata)
+        if resource.domain_concepts:
+            domain_matches = sum(1 for concept in resource.domain_concepts 
+                                if any(keyword in concept.lower() for keyword in description_keywords))
+            if domain_matches > 0:
+                domain_score = min(0.3, domain_matches * 0.1)
+                score += domain_score
+                reasoning_parts.append(f"Matches {domain_matches} domain concepts")
         
         # Score based on constraints
         if request.constraints:

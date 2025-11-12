@@ -19,6 +19,8 @@ from ..core.types.models import MCPModel
 from ..core.direct_file_loader import DirectFileResourceLoader
 from ..core.structured_ingestion import StructuredIngestionEngine
 from ..core.resource_recommender import CanonicalResourceRecommender, RecommendationRequest
+from ..core.llm_enrichment import LLMEnrichmentEngine
+from ..env import get_env_bool
 
 logger = logging.getLogger(__name__)
 
@@ -73,9 +75,20 @@ class RecommendCanonicalResourcesTool(Tool[RecommendCanonicalResourcesParams, di
         if self._structured_resources is None:
             logger.info("Loading and structuring canonical resources...")
             raw_resources = self.loader.get_all_resources()
-            ingestion_engine = StructuredIngestionEngine()
+            
+            # Initialize enrichment engine if enabled
+            enrichment_engine = None
+            if get_env_bool("ENABLE_LLM_ENRICHMENT", False):
+                enrichment_engine = LLMEnrichmentEngine()
+                if enrichment_engine.enabled:
+                    cache_status = enrichment_engine.get_cache_status()
+                    logger.info(f"✅ LLM enrichment enabled: {cache_status['total_enrichments']} enrichments available")
+                else:
+                    logger.warning("LLM enrichment requested but not available (check ANTHROPIC_API_KEY)")
+            
+            ingestion_engine = StructuredIngestionEngine(enrichment_engine=enrichment_engine)
             self._structured_resources = ingestion_engine.ingest_resources(raw_resources)
-            self._recommender = CanonicalResourceRecommender(self._structured_resources)
+            self._recommender = CanonicalResourceRecommender(self._structured_resources, enrichment_engine=enrichment_engine)
             logger.info(f"Loaded {sum(len(resources) for resources in self._structured_resources.values())} structured resources")
     
     def _normalize_use_case(self, use_case: str) -> str:
@@ -192,9 +205,20 @@ class GetCanonicalOverviewTool(Tool[GetCanonicalOverviewParams, dict]):
         if self._structured_resources is None:
             logger.info("Loading and structuring canonical resources...")
             raw_resources = self.loader.get_all_resources()
-            ingestion_engine = StructuredIngestionEngine()
+            
+            # Initialize enrichment engine if enabled
+            enrichment_engine = None
+            if get_env_bool("ENABLE_LLM_ENRICHMENT", False):
+                enrichment_engine = LLMEnrichmentEngine()
+                if enrichment_engine.enabled:
+                    cache_status = enrichment_engine.get_cache_status()
+                    logger.info(f"✅ LLM enrichment enabled: {cache_status['total_enrichments']} enrichments available")
+                else:
+                    logger.warning("LLM enrichment requested but not available (check ANTHROPIC_API_KEY)")
+            
+            ingestion_engine = StructuredIngestionEngine(enrichment_engine=enrichment_engine)
             self._structured_resources = ingestion_engine.ingest_resources(raw_resources)
-            self._recommender = CanonicalResourceRecommender(self._structured_resources)
+            self._recommender = CanonicalResourceRecommender(self._structured_resources, enrichment_engine=enrichment_engine)
             logger.info(f"Loaded {sum(len(resources) for resources in self._structured_resources.values())} structured resources")
     
     async def execute(self, ctx: ToolContext[GetCanonicalOverviewParams, dict]):

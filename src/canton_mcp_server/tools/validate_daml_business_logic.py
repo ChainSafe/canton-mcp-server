@@ -45,6 +45,14 @@ class ValidateDamlResult(MCPModel):
     anti_pattern_matched: Optional[str] = Field(default=None, description="Name of matched anti-pattern if blocked")
     policy_reasoning: Optional[str] = Field(default=None, description="Reasoning for policy block")
     safe_alternatives: List[str] = Field(default=[], description="Suggested safe alternative patterns")
+    
+    # Delegation support
+    should_delegate: bool = Field(default=False, description="Whether tool should delegate to LLM due to low confidence")
+    delegation_reason: Optional[str] = Field(default=None, description="Why delegation is recommended")
+    confidence: float = Field(default=1.0, description="Overall confidence in validation (0.0-1.0)")
+    
+    # LLM insights (when available)
+    llm_insights: Optional[str] = Field(default=None, description="Additional context and insights from LLM analysis")
 
 
 @register_tool
@@ -103,11 +111,29 @@ class ValidateDamlBusinessLogicTool(Tool[ValidateDamlParams, ValidateDamlResult]
         anti_pattern_matched = None
         policy_reasoning = None
         safe_alternatives = []
+        should_delegate = False
+        delegation_reason = None
+        confidence = 1.0
+        llm_insights = None
         
         # Check Gate 1 results
         if safety_result:
-            if not safety_result.passed:
+            # Check if delegation is needed (low confidence)
+            if safety_result.should_delegate:
+                logger.warning(f"⚠️  Delegation required: {safety_result.delegation_reason}")
+                should_delegate = True
+                delegation_reason = safety_result.delegation_reason
+                confidence = safety_result.confidence
+                
+                issues.append(f"⚠️  ANALYSIS UNCERTAIN (confidence: {confidence:.2f})")
+                issues.append(f"Reason: {delegation_reason}")
+                suggestions.append(
+                    "This code uses complex patterns that require human review or LLM analysis. "
+                    "Consider simplifying the authorization model or using the LLM-enhanced analysis."
+                )
+            elif not safety_result.passed:
                 logger.warning(f"Gate 1 blocked: {safety_result.blocked_reason}")
+                confidence = safety_result.confidence
                 
                 # Check if it was blocked by policy (anti-pattern match)
                 if safety_result.policy_check and safety_result.policy_check.matches_anti_pattern:
@@ -128,6 +154,10 @@ class ValidateDamlBusinessLogicTool(Tool[ValidateDamlParams, ValidateDamlResult]
                     if safety_result.compilation_result and not safety_result.compilation_result.succeeded:
                         error_msgs = [str(err) for err in safety_result.compilation_result.errors]
                         issues.append(f"Compilation errors: {', '.join(error_msgs)}")
+            else:
+                # Passed - set confidence and LLM insights
+                confidence = safety_result.confidence
+                llm_insights = safety_result.llm_insights
         
         # Additional basic validation (if not blocked by policy)
         if not blocked_by_policy:
@@ -148,7 +178,7 @@ class ValidateDamlBusinessLogicTool(Tool[ValidateDamlParams, ValidateDamlResult]
 
         # Create result
         result = ValidateDamlResult(
-            valid=(len(issues) == 0 and not blocked_by_policy),
+            valid=(len(issues) == 0 and not blocked_by_policy and not should_delegate),
             issues=issues,
             suggestions=suggestions,
             business_intent=business_intent,
@@ -157,6 +187,10 @@ class ValidateDamlBusinessLogicTool(Tool[ValidateDamlParams, ValidateDamlResult]
             anti_pattern_matched=anti_pattern_matched,
             policy_reasoning=policy_reasoning,
             safe_alternatives=safe_alternatives,
+            should_delegate=should_delegate,
+            delegation_reason=delegation_reason,
+            confidence=confidence,
+            llm_insights=llm_insights,
         )
 
         # Return structured result

@@ -16,6 +16,7 @@ dependencies = [
     "watchdog>=4.0.0",
     "pyyaml>=6.0.0",
     "jsonschema>=4.0.0",
+    "anthropic>=0.34.0",
 ]
 keywords = ["canton", "daml", "blockchain", "mcp", "digital-asset"]
 classifiers = [

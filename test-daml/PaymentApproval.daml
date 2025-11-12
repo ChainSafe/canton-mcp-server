@@ -1,0 +1,258 @@
+module PaymentApproval where
+
+-- Payment details structure
+data PaymentDetails = PaymentDetails
+  with
+    amount: Decimal
+    currency: Text
+    recipient: Party
+    description: Text
+    invoiceNumber: Optional Text
+    paymentMethod: Text
+  deriving (Eq, Show)
+
+-- Approval status tracking
+data ApprovalStatus = Pending | Approved | Rejected | Expired | Executed
+  deriving (Eq, Show)
+
+-- Approval workflow type
+data ApprovalFlow = Sequential | Parallel
+  deriving (Eq, Show)
+
+-- Helper function to get next approver in sequence
+getNextApprover : [Party] -> Int -> Optional Party
+getNextApprover approvers index = 
+  if index < length approvers
+  then case drop index approvers of
+    [] -> None
+    (x :: _) -> Some x
+  else None
+
+-- Payment approval request template
+template PaymentApprovalRequest
+  with
+    requester: Party
+    approvers: [Party]
+    observers: [Party]
+    paymentDetails: PaymentDetails
+    requiredApprovals: Int
+    approvalFlow: ApprovalFlow
+    approvals: [Party]
+    rejections: [Party]
+    status: ApprovalStatus
+    createdAt: Time
+    expiresAt: Optional Time
+  where
+    signatory requester
+    observer approvers
+    observer observers
+    
+    ensure 
+      requiredApprovals > 0 && requiredApprovals <= length approvers &&
+      status == Pending &&
+      case expiresAt of
+        None -> True
+        Some expiry -> expiry > createdAt
+    
+    -- Approver adds their approval
+    choice ApprovePayment : ContractId PaymentApprovalRequest
+      with
+        approver: Party
+        approvalTimestamp: Time
+        approvals: [Party]
+      controller approver
+      do
+        assertMsg "Approver must be authorized" (approver `elem` approvers)
+        assertMsg "Payment not already approved or rejected" (status == Pending)
+        assertMsg "Approver hasn't already approved" (approver `notElem` approvals)
+        assertMsg "Approver hasn't rejected" (approver `notElem` rejections)
+        assertMsg "Approvals list must match current state" (length approvals == length this.approvals)
+        
+        -- Check expiration
+        case expiresAt of
+          None -> pure ()
+          Some expiry -> assertMsg "Payment request has expired" (approvalTimestamp <= expiry)
+        
+        -- For sequential flow, check if approver is next in order
+        case approvalFlow of
+          Sequential -> do
+            let approvalCount = length approvals
+            let nextApprover = getNextApprover approvers approvalCount
+            assertMsg "Approvals must be sequential" (Some approver == nextApprover)
+          Parallel -> pure ()
+        
+        let newApprovals = approver :: approvals
+        
+        if length newApprovals >= requiredApprovals
+        then do
+          -- All required approvals received - create approved payment
+          create ApprovedPayment with
+            requester
+            approvers = newApprovals
+            observers
+            paymentDetails
+            approvedAt = approvalTimestamp
+            createdAt
+          -- Return updated request (will be archived)
+          create this with approvals = newApprovals
+        else do
+          -- Still need more approvals
+          create this with approvals = newApprovals
+    
+    -- Approver can reject the payment
+    choice RejectPayment : ContractId RejectedPayment
+      with
+        approver: Party
+        rejectionReason: Text
+        rejectionTimestamp: Time
+        approvals: [Party]
+      controller approver
+      do
+        assertMsg "Approver must be authorized" (approver `elem` approvers)
+        assertMsg "Payment not already approved or rejected" (status == Pending)
+        assertMsg "Approver hasn't already approved" (approver `notElem` approvals)
+        assertMsg "Approver hasn't rejected" (approver `notElem` rejections)
+        assertMsg "Approvals list must match current state" (length approvals == length this.approvals)
+        
+        create RejectedPayment with
+          requester
+          approvers
+          observers
+          paymentDetails
+          rejectedBy = approver
+          rejectionReason
+          rejectedAt = rejectionTimestamp
+          approvals = approvals
+          createdAt
+    
+    -- Check expiration (can be called by any observer)
+    choice CheckExpiration : ContractId ExpiredPayment
+      with
+        checkTime: Time
+      controller observers
+      do
+        case expiresAt of
+          None -> abort "Payment has no expiration"
+          Some expiry -> do
+            assertMsg "Payment has expired" (checkTime > expiry)
+            create ExpiredPayment with
+              requester
+              approvers
+              observers
+              paymentDetails
+              expiredAt = checkTime
+              approvals = approvals
+              createdAt
+              expiresAt = expiry
+
+-- Approved payment ready for execution
+template ApprovedPayment
+  with
+    requester: Party
+    approvers: [Party]
+    observers: [Party]
+    paymentDetails: PaymentDetails
+    approvedAt: Time
+    createdAt: Time
+  where
+    signatory requester :: approvers
+    observer observers
+    
+    -- Only requester can execute after approval
+    choice ExecutePayment : ContractId ExecutedPayment
+      with
+        executionTime: Time
+      controller requester
+      do
+        create ExecutedPayment with
+          requester
+          approvers
+          observers
+          paymentDetails
+          approvedAt
+          executedAt = executionTime
+          createdAt
+    
+    -- Can be cancelled by requester before execution
+    choice CancelPayment : ContractId CancelledPayment
+      with
+        cancellationTime: Time
+      controller requester
+      do
+        create CancelledPayment with
+          requester
+          approvers
+          observers
+          paymentDetails
+          approvedAt
+          cancelledAt = cancellationTime
+          createdAt
+
+-- Executed payment - immutable audit record
+template ExecutedPayment
+  with
+    requester: Party
+    approvers: [Party]
+    observers: [Party]
+    paymentDetails: PaymentDetails
+    approvedAt: Time
+    executedAt: Time
+    createdAt: Time
+  where
+    signatory requester :: approvers
+    observer observers
+    
+    -- Immutable - no choices allowed
+
+-- Rejected payment - audit record
+template RejectedPayment
+  with
+    requester: Party
+    approvers: [Party]
+    observers: [Party]
+    paymentDetails: PaymentDetails
+    rejectedBy: Party
+    rejectionReason: Text
+    rejectedAt: Time
+    approvals: [Party]
+    createdAt: Time
+  where
+    signatory requester :: approvers
+    observer observers
+    
+    -- Immutable audit record
+
+-- Expired payment - audit record
+template ExpiredPayment
+  with
+    requester: Party
+    approvers: [Party]
+    observers: [Party]
+    paymentDetails: PaymentDetails
+    expiredAt: Time
+    approvals: [Party]
+    createdAt: Time
+    expiresAt: Time
+  where
+    signatory requester
+    observer approvers
+    observer observers
+    
+    -- Immutable audit record
+
+-- Cancelled payment - audit record
+template CancelledPayment
+  with
+    requester: Party
+    approvers: [Party]
+    observers: [Party]
+    paymentDetails: PaymentDetails
+    approvedAt: Time
+    cancelledAt: Time
+    createdAt: Time
+  where
+    signatory requester :: approvers
+    observer observers
+    
+    -- Immutable audit record
+

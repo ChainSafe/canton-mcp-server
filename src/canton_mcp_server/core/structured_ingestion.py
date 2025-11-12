@@ -54,6 +54,8 @@ class StructuredResource:
     canonical_hash: str
     source_repo: str
     source_commit: str
+    summary: Optional[str] = None
+    domain_concepts: Optional[List[str]] = None
 
 
 class StructuredIngestionEngine:
@@ -61,8 +63,14 @@ class StructuredIngestionEngine:
     Ingests canonical resources and structures them by use case and complexity.
     """
     
-    def __init__(self):
-        """Initialize the structured ingestion engine."""
+    def __init__(self, enrichment_engine=None):
+        """
+        Initialize the structured ingestion engine.
+        
+        Args:
+            enrichment_engine: Optional LLMEnrichmentEngine for enriched metadata
+        """
+        self.enrichment_engine = enrichment_engine
         
         # Define use case categories
         self.use_cases = {
@@ -165,6 +173,8 @@ class StructuredIngestionEngine:
         """
         Structure a single resource with metadata.
         
+        Merges LLM-enriched metadata if available, falls back to rule-based extraction.
+        
         Args:
             resource: Raw resource dictionary
             
@@ -174,21 +184,34 @@ class StructuredIngestionEngine:
         name = resource.get("name", "")
         content = resource.get("content", "")
         file_path = resource.get("file_path", "")
+        blob_hash = resource.get("canonical_hash", "")
         
-        # Extract keywords from content and path
-        keywords = self._extract_keywords(content, file_path, name)
+        # Try to get enriched metadata
+        enriched_metadata = None
+        if self.enrichment_engine:
+            enriched_metadata = self.enrichment_engine.get_enrichment(blob_hash)
         
-        # Determine use cases
-        use_cases = self._determine_use_cases(keywords, content)
-        
-        # Determine security level
-        security_level = self._determine_security_level(keywords, content)
-        
-        # Determine complexity level
-        complexity_level = self._determine_complexity_level(keywords, content)
-        
-        # Find related patterns
-        related_patterns = self._find_related_patterns(keywords, content)
+        # Use enriched metadata if available, otherwise fall back to rule-based
+        if enriched_metadata:
+            # Use enriched fields
+            keywords = enriched_metadata.keywords
+            use_cases = enriched_metadata.use_cases
+            security_level = self._parse_security_level(enriched_metadata.security_level)
+            complexity_level = self._parse_complexity_level(enriched_metadata.complexity_level)
+            summary = enriched_metadata.summary
+            domain_concepts = enriched_metadata.domain_concepts
+            
+            # Still extract related patterns from keywords
+            related_patterns = self._find_related_patterns(keywords, content)
+        else:
+            # Fall back to rule-based extraction
+            keywords = self._extract_keywords(content, file_path, name)
+            use_cases = self._determine_use_cases(keywords, content)
+            security_level = self._determine_security_level(keywords, content)
+            complexity_level = self._determine_complexity_level(keywords, content)
+            related_patterns = self._find_related_patterns(keywords, content)
+            summary = None
+            domain_concepts = None
         
         return StructuredResource(
             name=name,
@@ -200,10 +223,26 @@ class StructuredIngestionEngine:
             complexity_level=complexity_level,
             keywords=keywords,
             related_patterns=related_patterns,
-            canonical_hash=resource.get("canonical_hash", ""),
+            canonical_hash=blob_hash,
             source_repo=resource.get("source_repo", ""),
-            source_commit=resource.get("source_commit", "")
+            source_commit=resource.get("source_commit", ""),
+            summary=summary,
+            domain_concepts=domain_concepts
         )
+    
+    def _parse_security_level(self, level_str: str) -> SecurityLevel:
+        """Parse security level string to enum."""
+        try:
+            return SecurityLevel(level_str.lower())
+        except ValueError:
+            return SecurityLevel.BASIC
+    
+    def _parse_complexity_level(self, level_str: str) -> ComplexityLevel:
+        """Parse complexity level string to enum."""
+        try:
+            return ComplexityLevel(level_str.lower())
+        except ValueError:
+            return ComplexityLevel.BEGINNER
     
     def _extract_keywords(self, content: str, file_path: str, name: str) -> List[str]:
         """Extract keywords from content, path, and name."""
