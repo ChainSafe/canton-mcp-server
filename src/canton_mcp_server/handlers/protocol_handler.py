@@ -192,7 +192,7 @@ def handle_prompts_list() -> ListPromptsResult:
             description=(
                 "CRITICAL SECURITY INSTRUCTION: Always validate DAML code through Gate 1 "
                 "BEFORE writing any files. This prevents unsafe authorization patterns from "
-                "being created. Use validate_daml_business_logic tool to check code, and if "
+                "being created. Use daml_reason tool to check code, and if "
                 "validation fails, inform the user why and suggest safe alternatives. "
                 "Never write DAML code that fails Gate 1 validation to the filesystem."
             ),
@@ -215,7 +215,7 @@ def handle_prompts_list() -> ListPromptsResult:
             name="canonical-patterns-first",
             description=(
                 "Before creating new DAML patterns, search the canonical resource library "
-                "using recommend_canonical_resources tool. With 30k+ verified patterns from "
+                "using daml_reason tool. With 30k+ verified patterns from "
                 "the official DAML SDK, there's likely a safe, tested pattern that fits your "
                 "use case. This saves time and ensures you're following best practices."
             ),
