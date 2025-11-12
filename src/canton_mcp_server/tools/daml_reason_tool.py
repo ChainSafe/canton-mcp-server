@@ -151,7 +151,7 @@ class DamlReasonTool(Tool[DamlReasonParams, DamlReasonResult]):
         return s2.lower()
 
     async def execute(
-        self, params: DamlReasonParams, ctx: ToolContext
+        self, ctx: ToolContext[DamlReasonParams, DamlReasonResult]
     ):
         """
         Execute DAML Reason analysis.
@@ -163,9 +163,9 @@ class DamlReasonTool(Tool[DamlReasonParams, DamlReasonResult]):
         4. If low confidence → Delegate
         5. If high confidence → Approve with insights
         """
-        business_intent = params.business_intent
-        daml_code = params.daml_code
-        security_requirements = params.security_requirements or []
+        business_intent = ctx.params.business_intent
+        daml_code = ctx.params.daml_code
+        security_requirements = ctx.params.security_requirements or []
 
         # CASE 1: No code provided - just recommend patterns
         if not daml_code or daml_code.strip() == "":

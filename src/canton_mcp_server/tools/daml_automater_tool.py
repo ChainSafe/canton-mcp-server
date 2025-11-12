@@ -78,7 +78,7 @@ class DamlAutomaterTool(Tool[DamlAutomaterParams, DamlAutomaterResult]):
     )
 
     async def execute(
-        self, params: DamlAutomaterParams, ctx: ToolContext
+        self, ctx: ToolContext[DamlAutomaterParams, DamlAutomaterResult]
     ):
         """
         Execute DAML automation action.
@@ -89,8 +89,8 @@ class DamlAutomaterTool(Tool[DamlAutomaterParams, DamlAutomaterResult]):
         - deploy: Deploy to target environment
         - status: Check environment status
         """
-        action = params.action
-        environment = params.environment or "local"
+        action = ctx.params.action
+        environment = ctx.params.environment or "local"
         
         logger.info(f"DAML Automater called: action={action}, environment={environment}")
         
