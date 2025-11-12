@@ -97,10 +97,6 @@ class DamlAutomaterTool(Tool[DamlAutomaterParams, DamlAutomaterResult]):
         # TODO: Implement automation logic
         # This is a placeholder for the colleague to implement
         
-        yield ctx.text(f"🤖 DAML Automater - {action} on {environment}")
-        yield ctx.text(f"\n⚠️  This feature is under construction.")
-        yield ctx.text(f"\nPlease contact the infrastructure team for automation support.")
-        
         yield ctx.structured(DamlAutomaterResult(
             success=False,
             action=action,
