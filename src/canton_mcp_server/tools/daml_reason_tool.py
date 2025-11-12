@@ -198,9 +198,6 @@ class DamlReasonTool(Tool[DamlReasonParams, DamlReasonResult]):
                     "use_case": rec.use_case_match
                 })
             
-            yield ctx.text(f"📚 Based on your intent: '{business_intent}'")
-            yield ctx.text(f"\nI recommend exploring these canonical patterns:\n")
-            
             yield ctx.structured(DamlReasonResult(
                 action="suggest_patterns",
                 valid=False,
