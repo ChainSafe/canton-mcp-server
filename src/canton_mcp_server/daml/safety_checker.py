@@ -54,10 +54,33 @@ class SafetyChecker:
             audit_trail: Audit trail (creates default if None)
             resource_loader: Resource loader for canonical policies (creates default if None)
         """
-        from ..env import get_env
+        from ..env import get_env, get_env_bool, get_env_float
+        
         sdk_version = get_env("DAML_SDK_VERSION", "3.4.0-snapshot.20251013.0")
         self.compiler = compiler or DamlCompiler(sdk_version=sdk_version)
-        self.auth_validator = auth_validator or AuthorizationValidator()
+        
+        # Initialize AuthorizationValidator with LLM support if enabled
+        if auth_validator is None:
+            llm_client = None
+            if get_env_bool("ENABLE_LLM_AUTH_EXTRACTION", True):
+                try:
+                    from anthropic import Anthropic
+                    api_key = get_env("ANTHROPIC_API_KEY", "")
+                    if api_key:
+                        llm_client = Anthropic(api_key=api_key)
+                        logger.info("✅ LLM-enhanced authorization extraction enabled")
+                    else:
+                        logger.warning("ENABLE_LLM_AUTH_EXTRACTION=true but ANTHROPIC_API_KEY not set")
+                except ImportError:
+                    logger.warning("anthropic package not installed, LLM auth extraction disabled")
+            
+            confidence_threshold = get_env_float("LLM_AUTH_CONFIDENCE_THRESHOLD", 0.7)
+            auth_validator = AuthorizationValidator(
+                llm_client=llm_client,
+                confidence_threshold=confidence_threshold
+            )
+        
+        self.auth_validator = auth_validator
         self.type_verifier = type_verifier or TypeSafetyVerifier()
         self.audit_trail = audit_trail or AuditTrail()
         self.resource_loader = resource_loader or get_loader()
@@ -159,16 +182,77 @@ class SafetyChecker:
                 policy_check=policy_result,
             )
 
-        # Step 3: Extract authorization model
-        auth_model = self.auth_validator.extract_auth_model(code, compilation_result)
+        # Step 3: Extract authorization model with confidence scoring
+        auth_extraction = self.auth_validator.extract_auth_model(code, compilation_result)
+        
+        # Store extraction result for insights (will be added to SafetyCheckResult)
+        extraction_insights = None
+        if auth_extraction.llm_full_response:
+            # Extract any text outside the JSON as insights
+            try:
+                import json as json_lib
+                full_text = auth_extraction.llm_full_response
+                first_brace = full_text.find('{')
+                last_brace = full_text.rfind('}')
+                
+                insights_parts = []
+                if first_brace > 0:
+                    before = full_text[:first_brace].strip()
+                    if before:
+                        insights_parts.append(before)
+                
+                if last_brace < len(full_text) - 1:
+                    after = full_text[last_brace + 1:].strip()
+                    if after:
+                        insights_parts.append(after)
+                
+                if insights_parts:
+                    extraction_insights = "\n\n".join(insights_parts)
+            except Exception as e:
+                logger.debug(f"Could not extract LLM insights: {e}")
+        
+        # Step 3.5: Check if we should delegate (confidence too low)
+        if auth_extraction.confidence < 0.7:
+            logger.warning(
+                f"Authorization extraction confidence too low: {auth_extraction.confidence:.2f}. "
+                f"Method: {auth_extraction.method}, Uncertain fields: {auth_extraction.uncertain_fields}"
+            )
+            
+            # Log to audit trail with delegation flag
+            audit_id = self.audit_trail.log_compilation(
+                code_hash=code_hash,
+                module_name=module_name,
+                result=compilation_result,
+                auth_model=auth_extraction.model,
+                blocked=False,  # Not blocked, just uncertain
+                policy_check=None,
+            )
+            
+            delegation_details = f"Authorization extraction confidence too low ({auth_extraction.confidence:.2f})"
+            if auth_extraction.uncertain_fields:
+                delegation_details += f". Uncertain patterns: {', '.join(auth_extraction.uncertain_fields)}"
+            
+            return SafetyCheckResult(
+                passed=False,
+                should_delegate=True,
+                delegation_reason=delegation_details,
+                confidence=auth_extraction.confidence,
+                compilation_result=compilation_result,
+                authorization_model=auth_extraction.model,
+                blocked_reason=None,
+                safety_certificate=None,
+                audit_id=audit_id,
+                policy_check=None,
+                llm_insights=extraction_insights,
+            )
 
         # Step 4: Verify type safety
         type_safe = self.type_verifier.verify_type_safety(compilation_result)
 
         # Step 5: Validate authorization model
         auth_valid = True
-        if auth_model:
-            auth_valid = self.auth_validator.validate_authorization(auth_model)
+        if auth_extraction.model:
+            auth_valid = self.auth_validator.validate_authorization(auth_extraction.model)
         else:
             logger.warning("Could not extract authorization model")
             auth_valid = False
@@ -182,14 +266,17 @@ class SafetyChecker:
                 code_hash=code_hash,
                 module_name=module_name,
                 result=compilation_result,
-                auth_model=auth_model,
+                auth_model=auth_extraction.model,
                 blocked=True,
             )
 
             return SafetyCheckResult(
                 passed=False,
+                should_delegate=False,
+                delegation_reason=None,
+                confidence=auth_extraction.confidence,
                 compilation_result=compilation_result,
-                authorization_model=auth_model,
+                authorization_model=auth_extraction.model,
                 blocked_reason=blocked_reason,
                 safety_certificate=None,
                 audit_id=audit_id,
@@ -197,7 +284,7 @@ class SafetyChecker:
 
         # Step 7: Generate safety certificate
         safety_certificate = self._generate_safety_certificate(
-            code_hash, auth_model, compilation_result
+            code_hash, auth_extraction.model, compilation_result
         )
 
         # Step 8: Log to audit trail
@@ -205,7 +292,7 @@ class SafetyChecker:
             code_hash=code_hash,
             module_name=module_name,
             result=compilation_result,
-            auth_model=auth_model,
+            auth_model=auth_extraction.model,
             blocked=False,
         )
 
@@ -213,11 +300,15 @@ class SafetyChecker:
 
         return SafetyCheckResult(
             passed=True,
+            should_delegate=False,  # High confidence, no delegation needed
+            delegation_reason=None,
+            confidence=auth_extraction.confidence,
             compilation_result=compilation_result,
-            authorization_model=auth_model,
+            authorization_model=auth_extraction.model,
             blocked_reason=None,
             safety_certificate=safety_certificate,
             audit_id=audit_id,
+            llm_insights=extraction_insights,
         )
 
     def _should_block(

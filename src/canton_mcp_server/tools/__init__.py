@@ -1,15 +1,15 @@
-"""Canton MCP Tools - Auto-discovery for tool registration"""
+"""
+Canton MCP Server Tools
 
-from .validate_daml_business_logic import ValidateDamlBusinessLogicTool
-from .debug_authorization_failure import DebugAuthorizationFailureTool
-from .suggest_authorization_pattern import SuggestAuthorizationPatternTool
-from .recommend_canonical_resources_tool import RecommendCanonicalResourcesTool, GetCanonicalOverviewTool
+This module exposes two main tools:
+1. DAML Reason - Comprehensive DAML code analysis and advisory
+2. DAML Automater - CI/CD and environment automation
+"""
+
+from .daml_reason_tool import DamlReasonTool
+from .daml_automater_tool import DamlAutomaterTool
 
 __all__ = [
-    "ValidateDamlBusinessLogicTool",
-    "DebugAuthorizationFailureTool",
-    "SuggestAuthorizationPatternTool",
-    "RecommendCanonicalResourcesTool",
-    "GetCanonicalOverviewTool",
+    "DamlReasonTool",
+    "DamlAutomaterTool",
 ]
-

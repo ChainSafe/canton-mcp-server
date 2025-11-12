@@ -82,6 +82,18 @@ class AuthorizationModel:
 
 
 @dataclass
+class AuthorizationExtractionResult:
+    """Result of authorization extraction with confidence scoring"""
+
+    model: Optional[AuthorizationModel]
+    confidence: float  # 0.0 - 1.0, where 1.0 is highest confidence
+    method: str  # "regex_simple", "regex_complex", "llm_primary", "failed"
+    uncertain_fields: List[str] = field(default_factory=list)  # e.g., ["observers (list field)"]
+    reasoning: str = ""  # Brief explanation from JSON or extraction method
+    llm_full_response: Optional[str] = None  # Complete LLM response with full context and insights
+
+
+@dataclass
 class CompilationResult:
     """Result of DAML compilation attempt"""
 
@@ -131,7 +143,7 @@ class PolicyCheckResult:
 
 @dataclass
 class SafetyCheckResult:
-    """Gate 1 safety check result"""
+    """Gate 1 safety check result with delegation support"""
 
     passed: bool
     compilation_result: CompilationResult
@@ -140,19 +152,32 @@ class SafetyCheckResult:
     safety_certificate: Optional[str] = None
     audit_id: str = ""
     policy_check: Optional["PolicyCheckResult"] = None
-
+    
+    # Delegation support for paid tools
+    should_delegate: bool = False  # True if analysis confidence too low
+    delegation_reason: Optional[str] = None  # Why we're delegating
+    confidence: float = 1.0  # Overall confidence in analysis (0.0-1.0)
+    
+    # LLM insights (when available)
+    llm_insights: Optional[str] = None  # Additional context from LLM analysis
+    
     @property
     def is_safe(self) -> bool:
         """Alias for passed"""
         return self.passed
 
     def __str__(self) -> str:
+        if self.should_delegate:
+            return f"⚠️  DELEGATION REQUIRED: {self.delegation_reason} (confidence: {self.confidence:.2f})"
+        
         status = "✅ SAFE" if self.passed else "❌ BLOCKED"
         lines = [f"Safety Check: {status}"]
         if self.blocked_reason:
             lines.append(f"Reason: {self.blocked_reason}")
         if self.authorization_model:
             lines.append(str(self.authorization_model))
+        if self.confidence < 1.0:
+            lines.append(f"Confidence: {self.confidence:.2f}")
         if self.audit_id:
             lines.append(f"Audit ID: {self.audit_id}")
         return "\n".join(lines)

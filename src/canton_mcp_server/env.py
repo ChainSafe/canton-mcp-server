@@ -93,6 +93,19 @@ ENV_VALUES["DCAP_SERVER_NAME"] = os.getenv("DCAP_SERVER_NAME", "Canton MCP Serve
 ENV_VALUES["DCAP_DEFAULT_CALLER"] = os.getenv("DCAP_DEFAULT_CALLER", "unknown-client")
 ENV_VALUES["DCAP_DEFAULT_PAYER"] = os.getenv("DCAP_DEFAULT_PAYER", "0x0000000000000000000000000000000000000000")
 
+# LLM Enrichment Configuration
+ENV_VALUES["ENABLE_LLM_ENRICHMENT"] = os.getenv("ENABLE_LLM_ENRICHMENT", "false")
+ENV_VALUES["ANTHROPIC_API_KEY"] = os.getenv("ANTHROPIC_API_KEY", "")
+ENV_VALUES["LLM_ENRICHMENT_MODEL"] = os.getenv("LLM_ENRICHMENT_MODEL", "claude-3-5-haiku-20241022")
+ENV_VALUES["LLM_ENRICHMENT_BATCH_SIZE"] = os.getenv("LLM_ENRICHMENT_BATCH_SIZE", "20")
+ENV_VALUES["LLM_ENRICHMENT_MAX_TOKENS"] = os.getenv("LLM_ENRICHMENT_MAX_TOKENS", "500")
+
+# LLM Authorization Extraction Configuration (PRIMARY METHOD)
+# When enabled, LLM is the primary method for authorization extraction
+# When disabled, falls back to regex patterns (degraded mode)
+ENV_VALUES["ENABLE_LLM_AUTH_EXTRACTION"] = os.getenv("ENABLE_LLM_AUTH_EXTRACTION", "true")
+ENV_VALUES["LLM_AUTH_CONFIDENCE_THRESHOLD"] = os.getenv("LLM_AUTH_CONFIDENCE_THRESHOLD", "0.7")
+
 
 def get_env(key: str, default: str = "") -> str:
     """

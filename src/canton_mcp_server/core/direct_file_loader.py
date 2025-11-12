@@ -189,6 +189,9 @@ class DirectFileResourceLoader:
         self._cache_timestamp = datetime.utcnow()
         self._save_to_disk_cache(resources, commit_hashes)
         
+        # Trigger LLM enrichment if enabled (non-blocking, runs in background)
+        self._trigger_enrichment_if_enabled(resources, commit_hashes)
+        
         # Start hot-reload watcher if enabled
         if self.enable_hot_reload:
             self._start_file_watcher()
@@ -621,12 +624,22 @@ class DirectFileResourceLoader:
             Dictionary mapping use cases to structured resources
         """
         from .structured_ingestion import StructuredIngestionEngine
+        from .llm_enrichment import LLMEnrichmentEngine
         
         # Get raw resources
         raw_resources = self.get_all_resources()
         
-        # Structure them
-        ingestion_engine = StructuredIngestionEngine()
+        # Initialize enrichment engine if enabled
+        enrichment_engine = None
+        try:
+            from ..env import get_env_bool
+            if get_env_bool("ENABLE_LLM_ENRICHMENT", False):
+                enrichment_engine = LLMEnrichmentEngine()
+        except Exception:
+            pass
+        
+        # Structure them (with enrichment if available)
+        ingestion_engine = StructuredIngestionEngine(enrichment_engine=enrichment_engine)
         structured_resources = ingestion_engine.ingest_resources(raw_resources)
         
         # Convert StructuredResource objects to dictionaries for JSON serialization
@@ -646,10 +659,49 @@ class DirectFileResourceLoader:
                     "related_patterns": resource.related_patterns,
                     "canonical_hash": resource.canonical_hash,
                     "source_repo": resource.source_repo,
-                    "source_commit": resource.source_commit
+                    "source_commit": resource.source_commit,
+                    "summary": resource.summary,
+                    "domain_concepts": resource.domain_concepts
                 })
         
         return result
+    
+    def _trigger_enrichment_if_enabled(
+        self,
+        resources: Dict[str, List[Dict[str, Any]]],
+        commit_hashes: Dict[str, str]
+    ) -> None:
+        """
+        Trigger LLM enrichment if enabled (non-blocking).
+        
+        Args:
+            resources: Scanned resources
+            commit_hashes: Current commit hashes
+        """
+        try:
+            from ..env import get_env_bool
+            if not get_env_bool("ENABLE_LLM_ENRICHMENT", False):
+                return
+            
+            # Import here to avoid circular dependency
+            from .llm_enrichment import LLMEnrichmentEngine
+            
+            enrichment_engine = LLMEnrichmentEngine()
+            if not enrichment_engine.enabled:
+                return
+            
+            # Get all resources as flat list
+            all_resources = []
+            for resource_list in resources.values():
+                all_resources.extend(resource_list)
+            
+            # Trigger enrichment in background (non-blocking)
+            # Only enrich new files (not force_all)
+            logger.info("Triggering LLM enrichment for new/changed files...")
+            enrichment_engine.enrich_resources(all_resources, commit_hashes, force_all=False)
+            
+        except Exception as e:
+            logger.warning(f"Failed to trigger enrichment: {e}")
     
     def get_all_resources(self) -> List[Dict[str, Any]]:
         """

@@ -1,0 +1,197 @@
+module PaymentApprovalTest where
+
+import Daml.Script
+import PaymentApproval
+
+-- Test script demonstrating the payment approval workflow
+test_payment_approval_parallel = script do
+  -- Setup parties
+  financeDept <- allocateParty "FinanceDept"
+  legalDept <- allocateParty "LegalDept"
+  operationsDept <- allocateParty "OperationsDept"
+  vendor <- allocateParty "Vendor"
+  auditor <- allocateParty "Auditor"
+  
+  -- Create payment details
+  let paymentDetails = PaymentDetails with
+        amount = 50000.0
+        currency = "USD"
+        recipient = vendor
+        description = "Q4 2024 Software License Renewal"
+        invoiceNumber = Some "INV-2024-001"
+        paymentMethod = "Wire Transfer"
+  
+  -- Finance department requests payment requiring 2 approvals (parallel flow)
+  now <- getTime
+  let expiry = addRelTime now (RelTimeMicroseconds 86400000000) -- 1 day
+  
+  paymentRequestId <- submit financeDept do
+    createCmd PaymentApprovalRequest with
+      requester = financeDept
+      approvers = [legalDept, operationsDept]
+      observers = [auditor]
+      paymentDetails
+      requiredApprovals = 2
+      approvalFlow = Parallel
+      approvals = []
+      rejections = []
+      status = Pending
+      createdAt = now
+      expiresAt = Some expiry
+  
+  -- Legal department approves (parallel - can approve in any order)
+  paymentRequestId2 <- submit legalDept do
+    exerciseCmd paymentRequestId ApprovePayment with
+      approver = legalDept
+      approvalTimestamp = now
+      approvals = []
+  
+  -- Operations department approves (triggers full approval)
+  approvedPaymentId <- submit operationsDept do
+    exerciseCmd paymentRequestId2 ApprovePayment with
+      approver = operationsDept
+      approvalTimestamp = now
+      approvals = [legalDept]
+  
+  -- Finance department executes the approved payment
+  executedId <- submit financeDept do
+    exerciseCmd approvedPaymentId ExecutePayment with
+      executionTime = now
+  
+  return "Payment approved and executed successfully"
+
+-- Test sequential approval workflow
+test_payment_approval_sequential = script do
+  financeDept <- allocateParty "FinanceDept"
+  manager <- allocateParty "Manager"
+  director <- allocateParty "Director"
+  vendor <- allocateParty "Vendor"
+  auditor <- allocateParty "Auditor"
+  
+  let paymentDetails = PaymentDetails with
+        amount = 100000.0
+        currency = "USD"
+        recipient = vendor
+        description = "Equipment Purchase"
+        invoiceNumber = Some "INV-2024-002"
+        paymentMethod = "ACH"
+  
+  now <- getTime
+  let expiry = addRelTime now (RelTimeMicroseconds 172800000000) -- 2 days
+  
+  -- Request payment with sequential approval (manager must approve before director)
+  paymentRequestId <- submit financeDept do
+    createCmd PaymentApprovalRequest with
+      requester = financeDept
+      approvers = [manager, director]
+      observers = [auditor]
+      paymentDetails
+      requiredApprovals = 2
+      approvalFlow = Sequential
+      approvals = []
+      rejections = []
+      status = Pending
+      createdAt = now
+      expiresAt = Some expiry
+  
+  -- Manager approves first (required in sequential flow)
+  paymentRequestId2 <- submit manager do
+    exerciseCmd paymentRequestId ApprovePayment with
+      approver = manager
+      approvalTimestamp = now
+      approvals = []
+  
+  -- Director approves second (completes approval chain)
+  approvedPaymentId <- submit director do
+    exerciseCmd paymentRequestId2 ApprovePayment with
+      approver = director
+      approvalTimestamp = now
+      approvals = [manager]
+  
+  return "Sequential approval completed"
+
+-- Test rejection workflow
+test_payment_rejection = script do
+  financeDept <- allocateParty "FinanceDept"
+  approver <- allocateParty "Approver"
+  vendor <- allocateParty "Vendor"
+  auditor <- allocateParty "Auditor"
+  
+  let paymentDetails = PaymentDetails with
+        amount = 25000.0
+        currency = "USD"
+        recipient = vendor
+        description = "Service Contract"
+        invoiceNumber = None
+        paymentMethod = "Check"
+  
+  now <- getTime
+  
+  -- Request payment
+  paymentRequestId <- submit financeDept do
+    createCmd PaymentApprovalRequest with
+      requester = financeDept
+      approvers = [approver]
+      observers = [auditor]
+      paymentDetails
+      requiredApprovals = 1
+      approvalFlow = Parallel
+      approvals = []
+      rejections = []
+      status = Pending
+      createdAt = now
+      expiresAt = None
+  
+  -- Approver rejects the payment
+  rejectedId <- submit approver do
+    exerciseCmd paymentRequestId RejectPayment with
+      approver = approver
+      rejectionReason = "Missing required documentation"
+      rejectionTimestamp = now
+      approvals = []
+  
+  return "Payment rejected with reason"
+
+-- Test expiration workflow
+test_payment_expiration = script do
+  financeDept <- allocateParty "FinanceDept"
+  approver <- allocateParty "Approver"
+  auditor <- allocateParty "Auditor"
+  vendor <- allocateParty "Vendor"
+  
+  let paymentDetails = PaymentDetails with
+        amount = 15000.0
+        currency = "USD"
+        recipient = vendor
+        description = "Consulting Services"
+        invoiceNumber = Some "INV-2024-003"
+        paymentMethod = "Wire Transfer"
+  
+  now <- getTime
+  let expiry = addRelTime now (RelTimeMicroseconds 3600000000) -- 1 hour
+  
+  -- Request payment with short expiration
+  paymentRequestId <- submit financeDept do
+    createCmd PaymentApprovalRequest with
+      requester = financeDept
+      approvers = [approver]
+      observers = [auditor]
+      paymentDetails
+      requiredApprovals = 1
+      approvalFlow = Parallel
+      approvals = []
+      rejections = []
+      status = Pending
+      createdAt = now
+      expiresAt = Some expiry
+  
+  -- Wait and check expiration (simulated by auditor checking after expiry)
+  expiredTime <- getTime
+  let checkTime = addRelTime expiredTime (RelTimeMicroseconds 7200000000) -- 2 hours later
+  
+  expiredId <- submit auditor do
+    exerciseCmd paymentRequestId CheckExpiration with
+      checkTime = checkTime
+  
+  return "Payment expired and recorded"
+

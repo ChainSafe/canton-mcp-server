@@ -25,6 +25,7 @@ A **DAML-Safe by Construction** development platform that generates provably saf
 - **Git-Verified Content**: All resources verified via GitHub API
 - **Structured Ingestion**: Categorized by use case, security level, and complexity
 - **Intelligent Recommendations**: AI-powered resource suggestions
+- **LLM Enrichment** (Optional): Claude Haiku 3.5-based metadata enrichment for better search relevance
 
 ### 🚀 **Production Infrastructure**
 - **DCAP Performance Tracking**: Real-time performance monitoring via DCAP v2 protocol
@@ -534,6 +535,97 @@ Set pricing in tool definitions (default: FREE). Prices are specified in USD and
 
 See `src/canton_mcp_server/core/pricing.py` for pricing configuration options.
 
+### LLM Enrichment (Optional)
+
+The Canton MCP Server supports optional LLM-based enrichment of canonical resources using Claude Haiku 3.5. This dramatically improves search relevance by generating contextual summaries and domain concepts for each resource.
+
+#### Benefits
+
+- **Better Search Relevance**: Enriched summaries enable better contextual matching in `recommend_canonical_resources`
+- **Domain Concept Extraction**: Identifies business/technical concepts like "hedge fund", "collateral posting", "portfolio rebalancing"
+- **Incremental Updates**: Only enriches new/changed files (based on Git blob hashes)
+- **Persistent Cache**: Enrichments cached in `~/.canton-mcp/enrichment-cache.json` (survives restarts)
+
+#### Setup
+
+1. **Enable enrichment** in `.env.canton`:
+```bash
+ENABLE_LLM_ENRICHMENT=true
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+2. **Install dependencies** (if not already installed):
+```bash
+uv sync
+# or
+pip install anthropic>=0.34.0
+```
+
+3. **Run initial enrichment** (one-time, for all 30,000+ files):
+```bash
+canton-mcp enrich --all
+```
+
+**Cost Estimate**: ~$5-10 for initial enrichment of 30,000 files using Claude Haiku 3.5
+
+#### Usage
+
+**Enrich new/changed files** (automatic on server startup, or manual):
+```bash
+canton-mcp enrich --new
+```
+
+**Re-enrich all files** (force refresh):
+```bash
+canton-mcp enrich --all
+```
+
+**Check enrichment status**:
+```bash
+canton-mcp enrich --status
+```
+
+**View enrichment statistics**:
+```bash
+canton-mcp enrich --stats
+```
+
+#### How It Works
+
+1. **Automatic Enrichment**: When `ENABLE_LLM_ENRICHMENT=true`, the server automatically enriches new/changed files on startup (non-blocking)
+2. **Incremental Updates**: Only files with new Git blob hashes are enriched (changed files)
+3. **Cache Management**: Enrichments are cached by blob hash in `~/.canton-mcp/enrichment-cache.json`
+4. **Fallback**: If enrichment is disabled or unavailable, the server falls back to rule-based keyword extraction
+
+#### Configuration Options
+
+```bash
+# Enable/disable enrichment
+ENABLE_LLM_ENRICHMENT=false  # Default: false
+
+# Anthropic API key (required if enabled)
+ANTHROPIC_API_KEY=sk-ant-...
+
+# Model selection (default: claude-3-5-haiku-20241022)
+LLM_ENRICHMENT_MODEL=claude-3-5-haiku-20241022
+
+# Batch size for processing (default: 20)
+LLM_ENRICHMENT_BATCH_SIZE=20
+
+# Max tokens per response (default: 500)
+LLM_ENRICHMENT_MAX_TOKENS=500
+```
+
+#### Enrichment Metadata
+
+Each enriched resource includes:
+- **Summary**: 1-2 sentence description of what the resource teaches/shows
+- **Keywords**: 10-15 technical/business terms
+- **Use Cases**: Categorized use cases (asset_management, financial_instruments, etc.)
+- **Security Level**: basic/enhanced/enterprise
+- **Complexity Level**: beginner/intermediate/advanced
+- **Domain Concepts**: Business/technical concepts for better matching
+
 ## Usage
 
 ### Transport
@@ -620,12 +712,14 @@ Get intelligent recommendations for canonical DAML resources.
 
 **Parameters:**
 - `use_case` (string): Primary use case
-- `description` (string): Detailed description of what you're building
+- `description` (string): Detailed description of what you're building (be specific for better matches!)
 - `security_level` (string, optional): Required security level
 - `complexity_level` (string, optional): Required complexity level
 - `constraints` (array, optional): Specific constraints or requirements
 
 **Returns:** Curated list of relevant canonical resources with safety certificates
+
+**Note:** If LLM enrichment is enabled, recommendations use enriched summaries and domain concepts for better contextual matching.
 
 ##### `get_canonical_resource_overview`
 Get overview of available canonical resources organized by use case and safety level.
