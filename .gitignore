@@ -178,3 +178,6 @@ restart-server.sh
 
 # DAML audit logs (generated at runtime)
 daml_audit_logs/
+
+# ChromaDB index (generated locally, ~160MB)
+.chroma_db/

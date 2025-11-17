@@ -30,9 +30,7 @@ from ..core.pricing import PricingType, ToolPricing
 from ..core.types.models import MCPModel
 from ..daml.safety_checker import SafetyChecker
 from ..core.direct_file_loader import DirectFileResourceLoader
-from ..core.structured_ingestion import StructuredIngestionEngine
-from ..core.resource_recommender import CanonicalResourceRecommender, RecommendationRequest
-from ..core.llm_enrichment import LLMEnrichmentEngine
+from ..core.semantic_search import DAMLSemanticSearch, create_semantic_search
 from ..env import get_env_bool
 
 logger = logging.getLogger(__name__)
@@ -114,41 +112,38 @@ class DamlReasonTool(Tool[DamlReasonParams, DamlReasonResult]):
         # Initialize SafetyChecker (loads anti-patterns internally via ResourceLoader)
         self.safety_checker = SafetyChecker()
         
-        # Initialize pattern recommendation components (SEPARATE from SafetyChecker)
-        # Uses enriched metadata from ~/.canton-mcp/enrichment-cache.json
+        # Initialize semantic search components (simple and direct)
         canonical_docs_path = Path(os.environ.get("CANONICAL_DOCS_PATH", "../../canonical-daml-docs"))
         self.loader = DirectFileResourceLoader(canonical_docs_path)
-        self._structured_resources = None
-        self._recommender = None
+        self._raw_resources = None
+        self._semantic_search: Optional[DAMLSemanticSearch] = None
 
-    def _ensure_structured_resources(self):
-        """Ensure structured resources are loaded with enrichment."""
-        if self._structured_resources is None:
-            logger.info("Loading and structuring canonical resources...")
-            raw_resources = self.loader.get_all_resources()
+    def _ensure_semantic_search(self):
+        """Ensure semantic search is initialized with raw resources."""
+        if self._semantic_search is None:
+            logger.info("🔍 Initializing semantic search...")
             
-            # Initialize enrichment engine if enabled
-            # This reads from ~/.canton-mcp/enrichment-cache.json
-            enrichment_engine = None
-            if get_env_bool("ENABLE_LLM_ENRICHMENT", False):
-                enrichment_engine = LLMEnrichmentEngine()
-                if enrichment_engine.enabled:
-                    cache_status = enrichment_engine.get_cache_status()
-                    logger.info(f"✅ LLM enrichment enabled: {cache_status['total_enrichments']} enrichments available")
-                else:
-                    logger.warning("LLM enrichment requested but not available (check ANTHROPIC_API_KEY)")
+            # Load raw resources directly from repos (no enrichment, no caching)
+            self._raw_resources = self.loader.scan_repositories(force_refresh=False)
             
-            ingestion_engine = StructuredIngestionEngine(enrichment_engine=enrichment_engine)
-            self._structured_resources = ingestion_engine.ingest_resources(raw_resources)
-            self._recommender = CanonicalResourceRecommender(self._structured_resources, enrichment_engine=enrichment_engine)
-            logger.info(f"Loaded {sum(len(resources) for resources in self._structured_resources.values())} structured resources")
-
-    def _normalize_use_case(self, use_case: str) -> str:
-        """Normalize use_case to snake_case format."""
-        # Convert camelCase to snake_case
-        s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', use_case)
-        s2 = re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1)
-        return s2.lower()
+            # Flatten all resources into a single list
+            all_resources = []
+            for category, resources in self._raw_resources.items():
+                all_resources.extend(resources)
+            
+            logger.info(f"📚 Loaded {len(all_resources)} raw resources from canonical repos")
+            
+            # Initialize ChromaDB semantic search (indexes raw content directly)
+            self._semantic_search = create_semantic_search(
+                raw_resources=all_resources,
+                force_reindex=False  # Persist across restarts
+            )
+            
+            if self._semantic_search:
+                stats = self._semantic_search.get_stats()
+                logger.info(f"✅ Semantic search ready: {stats['indexed_count']} resources indexed")
+            else:
+                logger.warning("⚠️ Semantic search unavailable - falling back to basic recommendations")
 
     async def execute(
         self, ctx: ToolContext[DamlReasonParams, DamlReasonResult]
@@ -169,33 +164,36 @@ class DamlReasonTool(Tool[DamlReasonParams, DamlReasonResult]):
 
         # CASE 1: No code provided - just recommend patterns
         if not daml_code or daml_code.strip() == "":
-            logger.info(f"No code provided, recommending patterns for: {business_intent}")
+            logger.info(f"No code provided, finding similar patterns for: {business_intent}")
             
-            self._ensure_structured_resources()
+            # Initialize semantic search
+            self._ensure_semantic_search()
             
-            # Infer use_case from business_intent (simple heuristic)
-            use_case = self._infer_use_case(business_intent)
+            if self._semantic_search is None:
+                yield ctx.structured(DamlReasonResult(
+                    action="suggest_patterns",
+                    valid=False,
+                    business_intent=business_intent,
+                    recommended_patterns=[],
+                    reasoning="Semantic search unavailable - please provide DAML code for validation"
+                ))
+                return
             
-            request = RecommendationRequest(
-                use_case=use_case,
-                description=business_intent,
-                security_level=None,
-                complexity_level=None,
-                constraints=security_requirements,
-                existing_patterns=[]
+            # Use business intent as search query to find similar examples
+            similar_files = self._semantic_search.search_similar_files(
+                code=business_intent,
+                top_k=5,
+                raw_resources=[r for resources in self._raw_resources.values() for r in resources]
             )
             
-            recommendations = self._recommender.recommend_resources(request)
-            
-            # Format recommendations
+            # Format recommendations (raw files, no enrichment)
             formatted_patterns = []
-            for rec in recommendations[:5]:  # Top 5
+            for file in similar_files:
                 formatted_patterns.append({
-                    "name": rec.resource.name,
-                    "path": rec.resource.file_path,
-                    "score": rec.relevance_score,
-                    "reasoning": rec.reasoning,
-                    "use_case": rec.use_case_match
+                    "name": file.get("name", "Unknown"),
+                    "path": file.get("file_path", "Unknown"),
+                    "score": file.get("similarity_score", 0.0),
+                    "description": file.get("description", "")[:200]  # First 200 chars
                 })
             
             yield ctx.structured(DamlReasonResult(
@@ -203,7 +201,7 @@ class DamlReasonTool(Tool[DamlReasonParams, DamlReasonResult]):
                 valid=False,
                 business_intent=business_intent,
                 recommended_patterns=formatted_patterns,
-                reasoning="No code provided - recommending relevant canonical patterns to start from"
+                reasoning=f"Found {len(formatted_patterns)} similar patterns using semantic search. Review these examples for your use case."
             ))
             return
 
@@ -264,63 +262,41 @@ class DamlReasonTool(Tool[DamlReasonParams, DamlReasonResult]):
             for error in safety_result.compilation_result.errors:
                 issues.append(str(error))
         
-        # Get pattern recommendations to help fix the issues
-        self._ensure_structured_resources()
-        
-        use_case = self._infer_use_case(business_intent)
-        request = RecommendationRequest(
-            use_case=use_case,
-            description=business_intent,
-            security_level=None,
-            complexity_level=None,
-            constraints=security_requirements,
-            existing_patterns=[]
-        )
-        
-        recommendations = self._recommender.recommend_resources(request)
+        # Get pattern recommendations using semantic search
+        self._ensure_semantic_search()
         
         formatted_patterns = []
-        for rec in recommendations[:5]:
-            formatted_patterns.append({
-                "name": rec.resource.name,
-                "path": rec.resource.file_path,
-                "score": rec.relevance_score,
-                "reasoning": rec.reasoning,
-                "use_case": rec.use_case_match
-            })
+        if self._semantic_search:
+            # Search for similar code patterns to the failed code
+            similar_files = self._semantic_search.search_similar_files(
+                code=daml_code,
+                top_k=5,
+                raw_resources=[r for resources in self._raw_resources.values() for r in resources]
+            )
+            
+            # Format recommendations (raw files)
+            for file in similar_files:
+                formatted_patterns.append({
+                    "name": file.get("name", "Unknown"),
+                    "path": file.get("file_path", "Unknown"),
+                    "score": file.get("similarity_score", 0.0),
+                    "description": file.get("description", "")[:200]
+                })
         
         yield ctx.structured(DamlReasonResult(
             action="suggest_edits",
             valid=False,
             confidence=safety_result.confidence,
             issues=issues,
-            suggestions=["Review the recommended patterns below", "Fix authorization model issues", "Ensure all signatories are defined"],
+            suggestions=["Review the similar patterns below", "Fix authorization model issues", "Ensure all signatories are defined"],
             llm_insights=safety_result.llm_insights,
             business_intent=business_intent,
             recommended_patterns=formatted_patterns,
-            reasoning="Code validation failed. Review issues and consider using recommended canonical patterns."
+            reasoning=f"Code validation failed. Found {len(formatted_patterns)} similar patterns that might help fix the issues."
         ))
 
     def _extract_module_name(self, daml_code: str) -> Optional[str]:
         """Extract module name from DAML code"""
         match = re.search(r'^\s*module\s+(\w+)\s+where', daml_code, re.MULTILINE)
         return match.group(1) if match else None
-
-    def _infer_use_case(self, business_intent: str) -> str:
-        """Infer use_case from business intent using simple keyword matching."""
-        intent_lower = business_intent.lower()
-        
-        # Keyword-based use case detection
-        if any(kw in intent_lower for kw in ["asset", "portfolio", "fund", "investment"]):
-            return "asset_management"
-        elif any(kw in intent_lower for kw in ["bond", "swap", "option", "instrument", "financial"]):
-            return "financial_instruments"
-        elif any(kw in intent_lower for kw in ["vote", "govern", "proposal", "dao"]):
-            return "governance"
-        elif any(kw in intent_lower for kw in ["identity", "kyc", "credential", "verification"]):
-            return "identity_management"
-        elif any(kw in intent_lower for kw in ["supply", "chain", "logistics", "shipment"]):
-            return "supply_chain"
-        else:
-            return "basic_templates"
 
