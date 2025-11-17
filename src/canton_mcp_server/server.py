@@ -76,13 +76,6 @@ async def lifespan(app: FastAPI):
     # Check if we're in development mode (hot-reload enabled)
     import os
     enable_hot_reload = os.getenv("CANTON_HOT_RELOAD", "false").lower() == "true"
-    
-    # Load canonical resources
-    from canton_mcp_server.core.resources.loader import load_resources
-    load_resources(enable_hot_reload=enable_hot_reload)
-    
-    if enable_hot_reload:
-        logger.info("🔥 Hot-reload enabled for resource files")
 
     # Log registered tools
     registry = get_registry()
@@ -94,15 +87,6 @@ async def lifespan(app: FastAPI):
             else f"${tool.pricing.base_price}"
         )
         logger.info(f"   - {tool.name}: {tool.description[:60]}... ({pricing})")
-
-    # Log registered resources
-    from canton_mcp_server.core.resources.registry import get_registry as get_resource_registry
-    resource_registry = get_resource_registry()
-    stats = resource_registry.get_stats()
-    logger.info(f"✅ Loaded {stats['total']} canonical resources:")
-    for category, count in stats['by_category'].items():
-        if count > 0:
-            logger.info(f"   - {category}: {count} resources")
 
     # Start DCAP semantic_discover broadcasting
     broadcast_task = None
@@ -147,12 +131,6 @@ async def lifespan(app: FastAPI):
             await broadcast_task
         except asyncio.CancelledError:
             pass
-    
-    # Stop hot-reload file watcher if enabled
-    if enable_hot_reload:
-        from canton_mcp_server.core.resources.loader import stop_hot_reload
-        stop_hot_reload()
-        logger.info("🔥 Stopped hot-reload file watcher")
 
 
 # =============================================================================

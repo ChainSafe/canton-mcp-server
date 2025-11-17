@@ -1,0 +1,19 @@
+-- Clear security violation: anyone can steal assets
+module ClearSecurityViolation where
+
+template Wallet
+  with
+    owner: Party
+    balance: Decimal
+  where
+    signatory owner
+    
+    choice Withdraw : ()
+      with
+        amount: Decimal
+        attacker: Party
+      controller attacker  -- MAJOR ISSUE: Any party can withdraw from anyone's wallet!
+      do
+        assertMsg "Sufficient funds" (balance >= amount)
+        return ()
+

@@ -7,7 +7,7 @@ Data models for DAML compilation, safety checking, and audit trails.
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 
 class CompilationStatus(Enum):
@@ -131,17 +131,6 @@ class CompilationResult:
 
 
 @dataclass
-class PolicyCheckResult:
-    """Result of canonical policy checking against anti-patterns"""
-
-    matches_anti_pattern: bool
-    matched_anti_pattern_name: Optional[str] = None
-    match_reasoning: Optional[str] = None
-    suggested_alternatives: List[str] = field(default_factory=list)
-    llm_response: str = ""  # Full LLM response for audit trail
-
-
-@dataclass
 class SafetyCheckResult:
     """Gate 1 safety check result with delegation support"""
 
@@ -151,7 +140,6 @@ class SafetyCheckResult:
     blocked_reason: Optional[str] = None
     safety_certificate: Optional[str] = None
     audit_id: str = ""
-    policy_check: Optional["PolicyCheckResult"] = None
     
     # Delegation support for paid tools
     should_delegate: bool = False  # True if analysis confidence too low
@@ -160,6 +148,9 @@ class SafetyCheckResult:
     
     # LLM insights (when available)
     llm_insights: Optional[str] = None  # Additional context from LLM analysis
+    
+    # Similar files from semantic search (for context and learning)
+    similar_files: Optional[List[Dict[str, Any]]] = None
     
     @property
     def is_safe(self) -> bool:

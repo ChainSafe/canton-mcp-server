@@ -16,7 +16,6 @@ from .types import (
     AuthorizationModel,
     CompilationResult,
     CompilationStatus,
-    PolicyCheckResult,
 )
 
 logger = logging.getLogger(__name__)
@@ -56,7 +55,7 @@ class AuditTrail:
         result: CompilationResult,
         auth_model: Optional[AuthorizationModel],
         blocked: bool,
-        policy_check: Optional[PolicyCheckResult] = None,
+        llm_safety_check: Optional[dict] = None,
     ) -> str:
         """
         Log compilation attempt to audit trail.
@@ -67,7 +66,7 @@ class AuditTrail:
             result: Compilation result
             auth_model: Extracted authorization model (if successful)
             blocked: Whether pattern was blocked
-            policy_check: Policy check result (if policy checking was performed)
+            llm_safety_check: LLM safety check result (if LLM checking was performed)
 
         Returns:
             audit_id: Unique ID for this audit entry
@@ -75,15 +74,15 @@ class AuditTrail:
         audit_id = str(uuid.uuid4())
         timestamp = datetime.utcnow()
 
-        # Extract policy violation details if present
+        # Extract LLM safety check details if present
         policy_blocked = False
         anti_pattern_name = None
         policy_reasoning = None
         
-        if policy_check and policy_check.matches_anti_pattern:
+        if llm_safety_check and not llm_safety_check.get("is_safe", True):
             policy_blocked = True
-            anti_pattern_name = policy_check.matched_anti_pattern_name
-            policy_reasoning = policy_check.match_reasoning
+            anti_pattern_name = "LLM Safety Concern"
+            policy_reasoning = llm_safety_check.get("reasoning", "")
 
         entry = AuditEntry(
             audit_id=audit_id,
