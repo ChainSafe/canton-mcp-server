@@ -11,7 +11,7 @@ This tool handles DAML development automation tasks such as:
 
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any
 
 from pydantic import Field
 
@@ -35,7 +35,7 @@ class DamlAutomaterParams(MCPModel):
         default="local",
         description="Target environment: 'local', 'dev', 'staging', 'prod'"
     )
-    config: Optional[dict] = Field(
+    config: Optional[Dict[str, Any]] = Field(
         default=None,
         description="""Additional configuration for the automation action.
         
