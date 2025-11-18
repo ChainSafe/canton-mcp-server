@@ -183,13 +183,17 @@ canton {{
                 logger.info(f"📥 Pulling Canton image: {canton_image}")
                 self.docker_client.images.pull(canton_image)
             
+            # Calculate admin API port
+            admin_port = ledger_port + 1000
+            
             # Start container
             container = self.docker_client.containers.run(
                 canton_image,
                 command=cmd,
                 ports={
                     f'{ledger_port}/tcp': ledger_port,
-                    f'{json_port}/tcp': json_port
+                    f'{json_port}/tcp': json_port,
+                    f'{admin_port}/tcp': admin_port  # Expose admin API for health checks
                 },
                 volumes=volumes,
                 detach=True,
