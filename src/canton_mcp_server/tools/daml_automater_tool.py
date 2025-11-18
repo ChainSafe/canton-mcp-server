@@ -29,7 +29,7 @@ class DamlAutomaterParams(MCPModel):
     """Parameters for DAML Automater tool"""
 
     action: str = Field(
-        description="Automation action to perform: 'spin_up_env', 'run_tests', 'build_dar', 'status', 'teardown_env'"
+        description="Automation action to perform: 'spin_up_env', 'run_tests', 'build_dar', 'status', 'teardown_env', 'check_project', 'init_project'"
     )
     environment: Optional[str] = Field(
         default="local",
@@ -40,11 +40,13 @@ class DamlAutomaterParams(MCPModel):
         description="""Additional configuration for the automation action.
         
 Common config options:
-- project_path: Absolute path to DAML project (required for run_tests, build_dar)
+- project_path: Absolute path to DAML project (required for run_tests, build_dar, check_project, init_project)
 - dar_path: Path to DAR file (for spin_up_env)
 - env_id: Environment ID (for status, teardown_env)
 - ledger_api_port: Port for Ledger API (default: 6865)
 - json_api_port: Port for JSON API (default: 7575)
+- project_name: Name for new project (for init_project, default: 'daml-project')
+- sdk_version: DAML SDK version (for init_project, default: '3.1.0')
 
 IMPORTANT: Use absolute paths for project_path. The MCP server runs in its own directory,
 not the client's working directory. Example: '/Users/you/my-daml-project'"""
@@ -114,6 +116,8 @@ class DamlAutomaterTool(Tool[DamlAutomaterParams, DamlAutomaterResult]):
         - build_dar: Build DAML project to DAR
         - status: Check Canton environment status
         - teardown_env: Stop and remove Canton environment
+        - check_project: Verify if valid DAML project exists
+        - init_project: Initialize boilerplate DAML project structure
         """
         action = ctx.params.action
         environment = ctx.params.environment or "local"
@@ -135,6 +139,10 @@ class DamlAutomaterTool(Tool[DamlAutomaterParams, DamlAutomaterResult]):
                 result = await self._get_status(config)
             elif action == "teardown_env":
                 result = await self._teardown_env(config)
+            elif action == "check_project":
+                result = await self._check_project(config)
+            elif action == "init_project":
+                result = await self._init_project(config)
             else:
                 result = DamlAutomaterResult(
                     success=False,
@@ -146,7 +154,9 @@ class DamlAutomaterTool(Tool[DamlAutomaterParams, DamlAutomaterResult]):
                             "run_tests",
                             "build_dar",
                             "status",
-                            "teardown_env"
+                            "teardown_env",
+                            "check_project",
+                            "init_project"
                         ]
                     }
                 )
@@ -364,5 +374,236 @@ class DamlAutomaterTool(Tool[DamlAutomaterParams, DamlAutomaterResult]):
             action="teardown_env",
             message=message,
             details=details
+        )
+    
+    async def _check_project(self, config: dict) -> DamlAutomaterResult:
+        """
+        Check if valid DAML project exists at path.
+        
+        Config options:
+        - project_path: Absolute path to directory to check (REQUIRED)
+        """
+        project_path_str = config.get('project_path')
+        if not project_path_str:
+            return DamlAutomaterResult(
+                success=False,
+                action="check_project",
+                message="❌ Missing required config: project_path",
+                details={
+                    "error": "project_path is required",
+                    "example": {"project_path": "/Users/you/my-daml-project"}
+                }
+            )
+        
+        project_path = Path(project_path_str)
+        
+        logger.info(f"🔍 Checking DAML project: {project_path}")
+        
+        # Check if directory exists
+        if not project_path.exists():
+            return DamlAutomaterResult(
+                success=True,
+                action="check_project",
+                message=f"Directory does not exist: {project_path}",
+                details={
+                    "exists": False,
+                    "is_directory": False,
+                    "has_daml_yaml": False,
+                    "valid": False,
+                    "project_path": str(project_path)
+                }
+            )
+        
+        if not project_path.is_dir():
+            return DamlAutomaterResult(
+                success=True,
+                action="check_project",
+                message=f"Path exists but is not a directory: {project_path}",
+                details={
+                    "exists": True,
+                    "is_directory": False,
+                    "has_daml_yaml": False,
+                    "valid": False,
+                    "project_path": str(project_path)
+                }
+            )
+        
+        # Check for daml.yaml
+        daml_yaml = project_path / "daml.yaml"
+        has_daml_yaml = daml_yaml.exists()
+        
+        if not has_daml_yaml:
+            return DamlAutomaterResult(
+                success=True,
+                action="check_project",
+                message=f"Directory exists but no daml.yaml found: {project_path}",
+                details={
+                    "exists": True,
+                    "is_directory": True,
+                    "has_daml_yaml": False,
+                    "valid": False,
+                    "project_path": str(project_path)
+                }
+            )
+        
+        # Try to parse daml.yaml
+        try:
+            project = self._daml_builder.parse_daml_yaml(project_path)
+            
+            return DamlAutomaterResult(
+                success=True,
+                action="check_project",
+                message=f"✅ Valid DAML project: {project.name}",
+                details={
+                    "exists": True,
+                    "is_directory": True,
+                    "has_daml_yaml": True,
+                    "valid": True,
+                    "project_path": str(project_path),
+                    "project_info": {
+                        "name": project.name,
+                        "version": project.version,
+                        "sdk_version": project.sdk_version
+                    }
+                }
+            )
+        except Exception as e:
+            return DamlAutomaterResult(
+                success=True,
+                action="check_project",
+                message=f"⚠️ daml.yaml exists but is invalid: {str(e)}",
+                details={
+                    "exists": True,
+                    "is_directory": True,
+                    "has_daml_yaml": True,
+                    "valid": False,
+                    "project_path": str(project_path),
+                    "parse_error": str(e)
+                }
+            )
+    
+    async def _init_project(self, config: dict) -> DamlAutomaterResult:
+        """
+        Initialize boilerplate DAML project structure.
+        
+        Config options:
+        - project_path: Absolute path to create project in (REQUIRED)
+        - project_name: Name of the project (default: 'daml-project')
+        - sdk_version: DAML SDK version (default: '3.1.0')
+        
+        SAFETY: Will NOT overwrite existing daml.yaml
+        """
+        project_path_str = config.get('project_path')
+        if not project_path_str:
+            return DamlAutomaterResult(
+                success=False,
+                action="init_project",
+                message="❌ Missing required config: project_path",
+                details={
+                    "error": "project_path is required",
+                    "example": {"project_path": "/Users/you/my-daml-project"}
+                }
+            )
+        
+        project_path = Path(project_path_str)
+        project_name = config.get('project_name', 'daml-project')
+        sdk_version = config.get('sdk_version', '3.1.0')
+        
+        logger.info(f"🏗️ Initializing DAML project: {project_path}")
+        
+        # Create directory if it doesn't exist
+        try:
+            project_path.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            return DamlAutomaterResult(
+                success=False,
+                action="init_project",
+                message=f"❌ Failed to create directory: {str(e)}",
+                details={"error": str(e), "project_path": str(project_path)}
+            )
+        
+        # SAFETY CHECK: Fail if daml.yaml already exists
+        daml_yaml = project_path / "daml.yaml"
+        if daml_yaml.exists():
+            return DamlAutomaterResult(
+                success=False,
+                action="init_project",
+                message=f"❌ daml.yaml already exists at {project_path}. Will not overwrite.",
+                details={
+                    "error": "daml.yaml already exists",
+                    "project_path": str(project_path),
+                    "safety": "init_project will not overwrite existing files"
+                }
+            )
+        
+        # Create daml.yaml
+        daml_yaml_content = f"""sdk-version: {sdk_version}
+name: {project_name}
+version: 0.0.1
+source: daml
+dependencies:
+  - daml-prim
+  - daml-stdlib
+"""
+        
+        try:
+            daml_yaml.write_text(daml_yaml_content)
+            logger.info(f"✅ Created daml.yaml")
+        except Exception as e:
+            return DamlAutomaterResult(
+                success=False,
+                action="init_project",
+                message=f"❌ Failed to create daml.yaml: {str(e)}",
+                details={"error": str(e)}
+            )
+        
+        # Create daml/ directory
+        daml_dir = project_path / "daml"
+        try:
+            daml_dir.mkdir(exist_ok=True)
+            logger.info(f"✅ Created daml/ directory")
+        except Exception as e:
+            return DamlAutomaterResult(
+                success=False,
+                action="init_project",
+                message=f"❌ Failed to create daml/ directory: {str(e)}",
+                details={"error": str(e)}
+            )
+        
+        # Create placeholder Main.daml
+        main_daml = daml_dir / "Main.daml"
+        if not main_daml.exists():  # Only create if doesn't exist
+            main_daml_content = f"""-- Main module for {project_name}
+module Main where
+
+-- TODO: Add your DAML code here
+-- This is a placeholder file to get you started
+
+template Placeholder
+  with
+    party: Party
+  where
+    signatory party
+"""
+            try:
+                main_daml.write_text(main_daml_content)
+                logger.info(f"✅ Created Main.daml placeholder")
+            except Exception as e:
+                logger.warning(f"Failed to create Main.daml: {e}")
+        
+        return DamlAutomaterResult(
+            success=True,
+            action="init_project",
+            message=f"✅ Initialized DAML project: {project_name}",
+            details={
+                "project_path": str(project_path),
+                "project_name": project_name,
+                "sdk_version": sdk_version,
+                "files_created": [
+                    str(daml_yaml.relative_to(project_path)),
+                    str(daml_dir.relative_to(project_path)),
+                    str(main_daml.relative_to(project_path)) if main_daml.exists() else None
+                ]
+            }
         )
 
