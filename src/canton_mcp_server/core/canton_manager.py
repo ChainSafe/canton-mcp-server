@@ -29,12 +29,24 @@ class CantonEnvironment:
     ledger_port: int = 6865
     json_port: int = 7575
     started_at: datetime = field(default_factory=datetime.utcnow)
+    config_dir: Optional[Path] = None  # Temp config directory to cleanup
     
     def is_healthy(self) -> bool:
         """Check if Canton is responding"""
+        # Check container status first
+        if self.container:
+            try:
+                self.container.reload()
+                if self.container.status != "running":
+                    return False
+            except Exception:
+                return False
+        
+        # Try admin API health check (admin-api.port = ledger_port + 1000)
+        admin_port = self.ledger_port + 1000
         try:
             response = requests.get(
-                f"http://localhost:{self.json_port}/livez",
+                f"http://localhost:{admin_port}/health",
                 timeout=2
             )
             return response.status_code == 200
@@ -59,6 +71,15 @@ class CantonEnvironment:
                 self.container.remove(force=True)
             except Exception as e:
                 logger.error(f"Failed to remove container {self.env_id}: {e}")
+        
+        # Cleanup temp config directory
+        if self.config_dir and self.config_dir.exists():
+            try:
+                import shutil
+                shutil.rmtree(self.config_dir)
+                logger.debug(f"Cleaned up config dir: {self.config_dir}")
+            except Exception as e:
+                logger.warning(f"Failed to cleanup config dir: {e}")
 
 
 class CantonManager:
@@ -110,20 +131,40 @@ class CantonManager:
         """
         env_id = f"canton-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}"
         
-        # Build command
-        cmd = [
-            "sandbox",
-            "--ledger-api-port", str(ledger_port),
-            "--json-api-port", str(json_port)
-        ]
+        # Create minimal Canton config for sandbox mode
+        canton_config = f"""
+canton {{
+  participants {{
+    sandbox {{
+      storage.type = memory
+      ledger-api.port = {ledger_port}
+      admin-api.port = {ledger_port + 1000}
+    }}
+  }}
+}}
+"""
         
-        volumes = {}
+        # Build command - use daemon mode with config
+        cmd = ["daemon", "-c", "/canton-config/sandbox.conf"]
+        
+        # Setup volumes
+        import tempfile
+        config_dir = Path(tempfile.mkdtemp(prefix="canton-config-"))
+        config_file = config_dir / "sandbox.conf"
+        config_file.write_text(canton_config)
+        
+        volumes = {
+            str(config_dir): {
+                'bind': '/canton-config',
+                'mode': 'ro'
+            }
+        }
+        
         if dar_path:
             dar_path_obj = Path(dar_path).resolve()
             if not dar_path_obj.exists():
                 raise FileNotFoundError(f"DAR file not found: {dar_path}")
             
-            cmd.extend(["--dar", "/dars/project.dar"])
             volumes[str(dar_path_obj)] = {
                 'bind': '/dars/project.dar',
                 'mode': 'ro'
@@ -161,7 +202,8 @@ class CantonManager:
                 env_id=env_id,
                 container=container,
                 ledger_port=ledger_port,
-                json_port=json_port
+                json_port=json_port,
+                config_dir=config_dir
             )
             
             # Wait for Canton to be ready
