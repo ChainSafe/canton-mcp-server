@@ -127,8 +127,13 @@ class DAMLSemanticSearch:
         current_count = self.collection.count()
         expected_count = len(resources_to_index)
         
-        if not force_reindex and current_count == expected_count:
-            logger.info(f"✅ Index up-to-date ({current_count} resources)")
+        # Allow small differences (duplicates, failed indexing, etc.)
+        # If within 1% or 50 items, consider it up-to-date
+        count_diff = abs(current_count - expected_count)
+        tolerance = max(50, int(expected_count * 0.01))
+        
+        if not force_reindex and count_diff <= tolerance:
+            logger.info(f"✅ Index up-to-date ({current_count} resources, diff: {count_diff})")
             return current_count
         
         # Clear existing index if forcing reindex
