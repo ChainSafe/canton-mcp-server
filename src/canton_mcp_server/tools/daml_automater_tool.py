@@ -46,7 +46,7 @@ Common config options:
 - ledger_api_port: Port for Ledger API (default: 6865)
 - json_api_port: Port for JSON API (default: 7575)
 - project_name: Name for new project (for init_project, default: 'daml-project')
-- sdk_version: DAML SDK version (for init_project, default: '3.1.0')
+- sdk_version: DAML SDK version (for init_project, default: '3.4.0-snapshot.20251013.0')
 
 IMPORTANT: Use absolute paths for project_path. The MCP server runs in its own directory,
 not the client's working directory. Example: '/Users/you/my-daml-project'"""
@@ -507,7 +507,7 @@ class DamlAutomaterTool(Tool[DamlAutomaterParams, DamlAutomaterResult]):
         
         project_path = Path(project_path_str)
         project_name = config.get('project_name', 'daml-project')
-        sdk_version = config.get('sdk_version', '3.1.0')
+        sdk_version = config.get('sdk_version', '3.4.0-snapshot.20251013.0')
         
         logger.info(f"🏗️ Initializing DAML project: {project_path}")
         
