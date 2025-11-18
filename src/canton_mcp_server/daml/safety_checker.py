@@ -151,7 +151,7 @@ class SafetyChecker:
             # Ask LLM to reason about code safety
             response = await asyncio.to_thread(
                 llm_client.messages.create,
-                model="claude-sonnet-4-5-20250929",
+                model="claude-3-5-haiku-20241022",
                 max_tokens=2000,
                 messages=[{
                     "role": "user",
@@ -224,11 +224,11 @@ Be specific and reference the similar files by their paths."""
     def _format_similar_files_for_llm(self, similar_files: list) -> str:
         """Format similar files for LLM context."""
         formatted = []
-        for i, file in enumerate(similar_files[:10], 1):
+        for i, file in enumerate(similar_files[:5], 1):
             formatted.append(f"""
 FILE {i}: {file.get('file_path', 'unknown')} (similarity: {file.get('similarity_score', 0):.3f})
 ---
-{file.get('content', '')[:1500]}
+{file.get('content', '')[:1000]}
 ---
 """)
         return "\n".join(formatted)
@@ -296,7 +296,7 @@ FILE {i}: {file.get('file_path', 'unknown')} (similarity: {file.get('similarity_
         if self.semantic_search:
             similar_files = self.semantic_search.search_similar_files(
                 code=code,
-                top_k=10,
+                top_k=5,
                 raw_resources=[r for resources in self._raw_resources.values() for r in resources]
             )
             
@@ -327,7 +327,7 @@ FILE {i}: {file.get('file_path', 'unknown')} (similarity: {file.get('similarity_
                     safety_certificate=None,
                     audit_id=audit_id,
                     llm_insights=llm_safety_check.get("full_response"),
-                    similar_files=similar_files[:5]  # Top 5 for reference
+                    similar_files=similar_files  # Already limited to 5
                 )
 
         # Step 3: Extract authorization model with confidence scoring
