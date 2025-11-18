@@ -262,26 +262,45 @@ class DamlReasonTool(Tool[DamlReasonParams, DamlReasonResult]):
             for error in safety_result.compilation_result.errors:
                 issues.append(str(error))
         
-        # Get pattern recommendations using semantic search
-        self._ensure_semantic_search()
-        
+        # Get pattern recommendations
+        # OPTIMIZATION: Reuse similar_files from safety_result if available
         formatted_patterns = []
-        if self._semantic_search:
-            # Search for similar code patterns to the failed code
-            similar_files = self._semantic_search.search_similar_files(
-                code=daml_code,
-                top_k=5,
-                raw_resources=[r for resources in self._raw_resources.values() for r in resources]
-            )
-            
-            # Format recommendations (raw files)
-            for file in similar_files:
+        
+        if safety_result.similar_files:
+            # Use files already found by SafetyChecker (avoid re-searching)
+            logger.info("♻️ Reusing similar files from SafetyChecker")
+            for file in safety_result.similar_files[:5]:
                 formatted_patterns.append({
                     "name": file.get("name", "Unknown"),
                     "path": file.get("file_path", "Unknown"),
                     "score": file.get("similarity_score", 0.0),
                     "description": file.get("description", "")[:200]
                 })
+        else:
+            # Fallback: Search for patterns
+            logger.info("🔍 Searching for similar patterns...")
+            
+            # Reuse SafetyChecker's semantic search if available
+            if hasattr(self.safety_checker, '_raw_resources') and self.safety_checker._raw_resources:
+                self._raw_resources = self.safety_checker._raw_resources
+                self._semantic_search = self.safety_checker.semantic_search
+            else:
+                self._ensure_semantic_search()
+            
+            if self._semantic_search and self._raw_resources:
+                similar_files = self._semantic_search.search_similar_files(
+                    code=daml_code,
+                    top_k=5,
+                    raw_resources=[r for resources in self._raw_resources.values() for r in resources]
+                )
+                
+                for file in similar_files:
+                    formatted_patterns.append({
+                        "name": file.get("name", "Unknown"),
+                        "path": file.get("file_path", "Unknown"),
+                        "score": file.get("similarity_score", 0.0),
+                        "description": file.get("description", "")[:200]
+                    })
         
         yield ctx.structured(DamlReasonResult(
             action="suggest_edits",
