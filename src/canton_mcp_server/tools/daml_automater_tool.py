@@ -29,7 +29,7 @@ class DamlAutomaterParams(MCPModel):
     """Parameters for DAML Automater tool"""
 
     action: str = Field(
-        description="Automation action to perform: 'spin_up_env', 'run_tests', 'deploy', 'status'"
+        description="Automation action to perform: 'spin_up_env', 'run_tests', 'build_dar', 'status', 'teardown_env'"
     )
     environment: Optional[str] = Field(
         default="local",
@@ -37,7 +37,17 @@ class DamlAutomaterParams(MCPModel):
     )
     config: Optional[dict] = Field(
         default=None,
-        description="Additional configuration for the automation action"
+        description="""Additional configuration for the automation action.
+        
+Common config options:
+- project_path: Absolute path to DAML project (required for run_tests, build_dar)
+- dar_path: Path to DAR file (for spin_up_env)
+- env_id: Environment ID (for status, teardown_env)
+- ledger_api_port: Port for Ledger API (default: 6865)
+- json_api_port: Port for JSON API (default: 7575)
+
+IMPORTANT: Use absolute paths for project_path. The MCP server runs in its own directory,
+not the client's working directory. Example: '/Users/you/my-daml-project'"""
     )
 
 
@@ -198,10 +208,22 @@ class DamlAutomaterTool(Tool[DamlAutomaterParams, DamlAutomaterResult]):
         Run DAML tests for a project.
         
         Config options:
-        - project_path: Path to DAML project (default: current directory)
+        - project_path: Absolute path to DAML project (REQUIRED)
         - test_filter: Optional filter for specific tests
         """
-        project_path = Path(config.get('project_path', '.'))
+        project_path_str = config.get('project_path')
+        if not project_path_str:
+            return DamlAutomaterResult(
+                success=False,
+                action="run_tests",
+                message="❌ Missing required config: project_path (must be absolute path to DAML project)",
+                details={
+                    "error": "project_path is required",
+                    "example": {"project_path": "/Users/you/my-daml-project"}
+                }
+            )
+        
+        project_path = Path(project_path_str)
         test_filter = config.get('test_filter')
         
         logger.info(f"🧪 Running DAML tests: {project_path}")
@@ -235,9 +257,21 @@ class DamlAutomaterTool(Tool[DamlAutomaterParams, DamlAutomaterResult]):
         Build DAML project to DAR file.
         
         Config options:
-        - project_path: Path to DAML project (default: current directory)
+        - project_path: Absolute path to DAML project (REQUIRED)
         """
-        project_path = Path(config.get('project_path', '.'))
+        project_path_str = config.get('project_path')
+        if not project_path_str:
+            return DamlAutomaterResult(
+                success=False,
+                action="build_dar",
+                message="❌ Missing required config: project_path (must be absolute path to DAML project)",
+                details={
+                    "error": "project_path is required",
+                    "example": {"project_path": "/Users/you/my-daml-project"}
+                }
+            )
+        
+        project_path = Path(project_path_str)
         
         logger.info(f"🔨 Building DAML project: {project_path}")
         
