@@ -208,10 +208,39 @@ canton {{
             
             # Wait for Canton to be ready
             logger.info(f"⏳ Waiting for Canton to be ready...")
+            logger.debug(f"Container ID: {container.id}")
+            logger.debug(f"Container name: {container.name}")
+            logger.debug(f"Container status: {container.status}")
+            
             if not await self.wait_for_ready(env, timeout=60):
-                # Capture logs before cleanup
-                logs = container.logs(tail=50).decode('utf-8')
-                logger.error(f"Canton logs:\n{logs}")
+                # Capture detailed logs before cleanup
+                logger.error("❌ Canton failed to start. Gathering diagnostics...")
+                
+                # Container status
+                try:
+                    container.reload()
+                    logger.error(f"Container status: {container.status}")
+                    logger.error(f"Container health: {container.attrs.get('State', {})}")
+                except Exception as e:
+                    logger.error(f"Failed to get container status: {e}")
+                
+                # Container logs (all of them)
+                try:
+                    logs = container.logs(tail=100).decode('utf-8', errors='replace')
+                    if logs:
+                        logger.error(f"Canton logs:\n{logs}")
+                    else:
+                        logger.error("No logs available from container")
+                except Exception as e:
+                    logger.error(f"Failed to get logs: {e}")
+                
+                # Check if ports are actually exposed
+                try:
+                    container.reload()
+                    ports = container.ports
+                    logger.error(f"Container ports: {ports}")
+                except Exception as e:
+                    logger.error(f"Failed to get ports: {e}")
                 
                 container.stop()
                 container.remove()
@@ -252,15 +281,32 @@ canton {{
         
         while (time.time() - start_time) < timeout:
             attempts += 1
+            elapsed = int(time.time() - start_time)
+            
+            # Log every 5 attempts to show progress
+            if attempts % 5 == 0:
+                logger.info(f"Still waiting... (attempt {attempts}, {elapsed}s elapsed)")
+            
+            # Check container status first
+            if env.container:
+                try:
+                    env.container.reload()
+                    status = env.container.status
+                    if status == "exited":
+                        logger.error(f"Container exited prematurely (exit code: {env.container.attrs['State'].get('ExitCode')})")
+                        return False
+                    logger.debug(f"Attempt {attempts}: Container status={status}")
+                except Exception as e:
+                    logger.debug(f"Attempt {attempts}: Failed to check container: {e}")
             
             if env.is_healthy():
-                logger.info(f"✅ Canton ready after {attempts} attempts ({int(time.time() - start_time)}s)")
+                logger.info(f"✅ Canton ready after {attempts} attempts ({elapsed}s)")
                 return True
             
             logger.debug(f"Attempt {attempts}: Canton not ready yet")
             await asyncio.sleep(poll_interval)
         
-        logger.error(f"❌ Canton failed to start within {timeout}s")
+        logger.error(f"❌ Canton failed to start within {timeout}s after {attempts} attempts")
         return False
     
     def get_status(self, env_id: str) -> Dict[str, Any]:
