@@ -33,23 +33,37 @@ class CantonEnvironment:
     
     def is_healthy(self) -> bool:
         """Check if Canton is responding"""
-        # Check container status first
-        if self.container:
-            try:
-                self.container.reload()
-                if self.container.status != "running":
-                    return False
-            except Exception:
-                return False
+        # Check container status
+        if not self.container:
+            return False
         
-        # Try admin API health check (admin-api.port = ledger_port + 1000)
-        admin_port = self.ledger_port + 1000
         try:
-            response = requests.get(
-                f"http://localhost:{admin_port}/health",
-                timeout=2
-            )
-            return response.status_code == 200
+            self.container.reload()
+            if self.container.status != "running":
+                return False
+            
+            # Canton takes time to start, check if it's been running for a bit
+            # and check if gRPC ports are listening
+            uptime = (datetime.utcnow() - self.started_at).total_seconds()
+            
+            # If container has been running for at least 5 seconds, 
+            # check if we can connect to the ledger API port
+            if uptime >= 5:
+                import socket
+                try:
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(1)
+                    result = sock.connect_ex(('localhost', self.ledger_port))
+                    sock.close()
+                    # Port is open if result is 0
+                    if result == 0:
+                        logger.debug(f"Ledger API port {self.ledger_port} is accepting connections")
+                        return True
+                except Exception as e:
+                    logger.debug(f"Socket check failed: {e}")
+            
+            return False
+            
         except Exception as e:
             logger.debug(f"Health check failed: {e}")
             return False
