@@ -1,0 +1,19 @@
+-- Subtle security issue: observer can act as controller
+module SubtleSecurityIssue where
+
+template DataSharing
+  with
+    dataOwner: Party
+    dataConsumer: Party
+    sensitiveData: Text
+  where
+    signatory dataOwner
+    observer dataConsumer
+    
+    choice ShareWithThirdParty : ContractId DataSharing
+      with
+        thirdParty: Party
+      controller dataConsumer  -- Issue: observer acting as controller without owner approval!
+      do
+        create this with dataConsumer = thirdParty
+

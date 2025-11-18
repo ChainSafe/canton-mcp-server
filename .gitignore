@@ -178,3 +178,12 @@ restart-server.sh
 
 # DAML audit logs (generated at runtime)
 daml_audit_logs/
+
+# ChromaDB index (generated locally, ~160MB)
+.chroma_db/
+
+# ChromaDB diagnostic scripts and database files
+scripts/chroma_db/
+scripts/*.sqlite3
+scripts/chromadiag.py
+scripts/inspect_vectors.py

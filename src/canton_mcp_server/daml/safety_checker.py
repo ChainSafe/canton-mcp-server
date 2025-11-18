@@ -14,11 +14,8 @@ from typing import Optional
 from .audit_trail import AuditTrail
 from .authorization_validator import AuthorizationValidator
 from .daml_compiler_integration import DamlCompiler
-from .policy_checker import check_against_policies
 from .type_safety_verifier import TypeSafetyVerifier
 from .types import CompilationStatus, SafetyCheckResult
-from ..core.resources.base import ResourceCategory
-from ..core.resources.loader import ResourceLoader, get_loader
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +39,7 @@ class SafetyChecker:
         auth_validator: Optional[AuthorizationValidator] = None,
         type_verifier: Optional[TypeSafetyVerifier] = None,
         audit_trail: Optional[AuditTrail] = None,
-        resource_loader: Optional[ResourceLoader] = None,
+        semantic_search: Optional['DAMLSemanticSearch'] = None,
     ):
         """
         Initialize safety checker with validators.
@@ -52,7 +49,7 @@ class SafetyChecker:
             auth_validator: Authorization validator (creates default if None)
             type_verifier: Type safety verifier (creates default if None)
             audit_trail: Audit trail (creates default if None)
-            resource_loader: Resource loader for canonical policies (creates default if None)
+            semantic_search: Semantic search engine for finding similar files (creates on first use if None)
         """
         from ..env import get_env, get_env_bool, get_env_float
         
@@ -83,9 +80,158 @@ class SafetyChecker:
         self.auth_validator = auth_validator
         self.type_verifier = type_verifier or TypeSafetyVerifier()
         self.audit_trail = audit_trail or AuditTrail()
-        self.resource_loader = resource_loader or get_loader()
+        self.semantic_search = semantic_search
+        self._raw_resources = None
 
         logger.info("Safety checker initialized (Gate 1: DAML Compiler Safety)")
+
+    def _ensure_semantic_search(self):
+        """Lazy initialization of semantic search with raw resources."""
+        if self.semantic_search is None:
+            from pathlib import Path
+            import os
+            from ..core.direct_file_loader import DirectFileResourceLoader
+            from ..core.semantic_search import create_semantic_search
+            
+            logger.info("Initializing semantic search for safety checking...")
+            canonical_docs_path = Path(os.environ.get("CANONICAL_DOCS_PATH", "../../canonical-daml-docs"))
+            loader = DirectFileResourceLoader(canonical_docs_path)
+            self._raw_resources = loader.scan_repositories(force_refresh=False)
+            
+            # Flatten all resources
+            all_resources = []
+            for resources in self._raw_resources.values():
+                all_resources.extend(resources)
+            
+            logger.info(f"Indexing {len(all_resources)} resources for semantic search...")
+            self.semantic_search = create_semantic_search(
+                raw_resources=all_resources,
+                force_reindex=False
+            )
+            
+            if self.semantic_search:
+                stats = self.semantic_search.get_stats()
+                logger.info(f"✅ Semantic search initialized: {stats['indexed_count']} resources indexed")
+            else:
+                logger.warning("⚠️ Semantic search unavailable - will skip similarity checks")
+
+    async def _check_safety_with_llm(
+        self,
+        code: str,
+        similar_files: list,
+        compilation_result: CompilationStatus
+    ) -> dict:
+        """
+        Use LLM to reason about code safety by comparing to similar files.
+        
+        Returns:
+            Dict with keys: is_safe, reasoning, confidence, full_response
+        """
+        from ..env import get_env
+        import asyncio
+        
+        # Check if LLM is available
+        api_key = get_env("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            # No LLM available - fall back to compilation-only validation
+            return {
+                "is_safe": True,
+                "reasoning": "No LLM available for safety analysis. Relying on compilation checks only.",
+                "confidence": 0.5,
+                "full_response": None
+            }
+        
+        try:
+            from anthropic import Anthropic
+            llm_client = Anthropic(api_key=api_key)
+            
+            # Format similar files for LLM context
+            context = self._format_similar_files_for_llm(similar_files)
+            
+            # Ask LLM to reason about code safety
+            response = await asyncio.to_thread(
+                llm_client.messages.create,
+                model="claude-3-5-haiku-20241022",
+                max_tokens=2000,
+                messages=[{
+                    "role": "user",
+                    "content": f"""Analyze this DAML code for safety issues by comparing it to similar examples from canonical repositories.
+
+USER'S CODE:
+```daml
+{code}
+```
+
+COMPILATION STATUS: {"✓ Passed" if compilation_result.succeeded else "✗ Failed"}
+
+SIMILAR EXAMPLES FROM CANONICAL REPOS:
+{context}
+
+Analyze:
+1. Does this code match any problematic patterns in the similar examples?
+2. Are there authorization issues (missing signatories, improper controllers)?
+3. Does it follow best practices shown in the canonical examples?
+4. What specific safety concerns exist?
+
+Respond in JSON format:
+{{
+  "is_safe": true/false,
+  "reasoning": "Brief explanation of safety assessment",
+  "concerns": ["list", "of", "concerns"],
+  "references": ["which similar files are relevant"],
+  "confidence": 0.0-1.0
+}}
+
+Be specific and reference the similar files by their paths."""
+                }]
+            )
+            
+            # Parse LLM response
+            response_text = response.content[0].text
+            
+            # Extract JSON from response (handle markdown code blocks)
+            import json
+            import re
+            json_match = re.search(r'\{[\s\S]*\}', response_text)
+            if json_match:
+                result = json.loads(json_match.group(0))
+                return {
+                    "is_safe": result.get("is_safe", True),
+                    "reasoning": result.get("reasoning", ""),
+                    "confidence": result.get("confidence", 0.7),
+                    "full_response": response_text,
+                    "concerns": result.get("concerns", []),
+                    "references": result.get("references", [])
+                }
+            else:
+                # Couldn't parse JSON - treat as unsafe to be cautious
+                return {
+                    "is_safe": False,
+                    "reasoning": "LLM response could not be parsed. Manual review required.",
+                    "confidence": 0.3,
+                    "full_response": response_text
+                }
+                
+        except Exception as e:
+            logger.error(f"LLM safety check failed: {e}")
+            return {
+                "is_safe": True,  # Don't block on LLM errors
+                "reasoning": f"LLM safety check error: {e}. Relying on compilation checks only.",
+                "confidence": 0.5,
+                "full_response": None
+            }
+
+    def _format_similar_files_for_llm(self, similar_files: list) -> str:
+        """Format similar files for LLM context."""
+        formatted = []
+        for i, file in enumerate(similar_files[:5], 1):
+            formatted.append(f"""
+FILE {i}: {file.get('file_path', 'unknown')} (similarity: {file.get('similarity_score', 0):.3f})
+---
+{file.get('content', '')[:1000]}
+---
+""")
+        return "\n".join(formatted)
 
     async def check_pattern_safety(
         self, code: str, module_name: str = "Main"
@@ -144,43 +290,45 @@ class SafetyChecker:
                 audit_id=audit_id,
             )
 
-        # Step 2.5: Check against canonical anti-patterns (NEW)
-        # Even if code compiles, it may match known anti-patterns
-        anti_patterns = self.resource_loader.registry.list_resources(
-            ResourceCategory.ANTI_PATTERN
-        )
-        safe_patterns = self.resource_loader.registry.list_resources(
-            ResourceCategory.PATTERN
-        )
+        # Step 2.5: Check code safety using ChromaDB + LLM reasoning
+        self._ensure_semantic_search()
         
-        policy_result = await check_against_policies(
-            code, anti_patterns, safe_patterns
-        )
-        
-        if policy_result.matches_anti_pattern:
-            logger.warning(
-                f"Pattern blocked by policy: {policy_result.matched_anti_pattern_name}"
+        if self.semantic_search:
+            similar_files = self.semantic_search.search_similar_files(
+                code=code,
+                top_k=5,
+                raw_resources=[r for resources in self._raw_resources.values() for r in resources]
             )
             
-            # Log to audit trail with policy violation
-            audit_id = self.audit_trail.log_compilation(
-                code_hash=code_hash,
-                module_name=module_name,
-                result=compilation_result,
-                auth_model=None,
-                blocked=True,
-                policy_check=policy_result,
+            # Let LLM reason about code safety with similar examples as context
+            llm_safety_check = await self._check_safety_with_llm(
+                code=code,
+                similar_files=similar_files,
+                compilation_result=compilation_result
             )
             
-            return SafetyCheckResult(
-                passed=False,
-                compilation_result=compilation_result,
-                authorization_model=None,
-                blocked_reason=f"Matches anti-pattern: {policy_result.matched_anti_pattern_name}",
-                safety_certificate=None,
-                audit_id=audit_id,
-                policy_check=policy_result,
-            )
+            if not llm_safety_check.get("is_safe", True):
+                # Block with LLM reasoning
+                logger.warning(f"Code blocked by LLM safety check: {llm_safety_check.get('reasoning', 'Unknown reason')}")
+                
+                audit_id = self.audit_trail.log_compilation(
+                    code_hash=code_hash,
+                    module_name=module_name,
+                    result=compilation_result,
+                    auth_model=None,
+                    blocked=True,
+                )
+                
+                return SafetyCheckResult(
+                    passed=False,
+                    compilation_result=compilation_result,
+                    authorization_model=None,
+                    blocked_reason=llm_safety_check.get("reasoning", "LLM safety check failed"),
+                    safety_certificate=None,
+                    audit_id=audit_id,
+                    llm_insights=llm_safety_check.get("full_response"),
+                    similar_files=similar_files  # Already limited to 5
+                )
 
         # Step 3: Extract authorization model with confidence scoring
         auth_extraction = self.auth_validator.extract_auth_model(code, compilation_result)

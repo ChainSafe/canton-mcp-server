@@ -1,0 +1,51 @@
+-- Test file for semantic search + LLM safety checking
+module SemanticSearchTest where
+
+import Daml.Script
+
+-- Well-designed asset transfer template
+template AssetTransfer
+  with
+    issuer: Party
+    currentOwner: Party
+    assetId: Text
+    value: Decimal
+  where
+    signatory issuer, currentOwner
+    
+    ensure value > 0.0
+    
+    choice TransferAsset : ContractId AssetTransfer
+      with
+        newOwner: Party
+      controller currentOwner
+      do
+        create this with currentOwner = newOwner
+    
+    choice SettleAsset : ()
+      controller issuer, currentOwner
+      do
+        return ()
+
+-- Test script
+test_asset_transfer = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+  
+  assetId <- submit alice do
+    createCmd AssetTransfer with
+      issuer = alice
+      currentOwner = alice
+      assetId = "ASSET-001"
+      value = 1000.0
+  
+  -- Transfer to Bob
+  newAssetId <- submit alice do
+    exerciseCmd assetId TransferAsset with newOwner = bob
+  
+  -- Settle with both parties agreeing
+  submit bob do
+    exerciseCmd newAssetId SettleAsset
+  
+  return ()
+

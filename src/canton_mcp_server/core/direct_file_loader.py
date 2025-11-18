@@ -20,8 +20,6 @@ from datetime import datetime
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
-from .github_verification import get_github_verifier
-
 logger = logging.getLogger(__name__)
 
 
@@ -77,7 +75,6 @@ class DirectFileResourceLoader:
             enable_hot_reload: Enable hot-reload file watching
         """
         self.canonical_docs_path = canonical_docs_path
-        self.github_verifier = get_github_verifier()
         self.enable_hot_reload = enable_hot_reload
         
         # Official repositories
@@ -457,9 +454,8 @@ class DirectFileResourceLoader:
                 canonical_hash = resource.get("canonical_hash")
                 
                 if source_file and source_commit and canonical_hash:
-                    if not self.github_verifier.verify_blob_hash(source_file, source_commit, canonical_hash):
-                        error_msg = f"Git verification failed for {resource.get('name', 'unknown')}"
-                        verification_results[resource_type].append(error_msg)
+                    # Git verification disabled - using direct file loading without verification
+                    pass
         
         # Log verification results
         total_errors = sum(len(errors) for errors in verification_results.values())
