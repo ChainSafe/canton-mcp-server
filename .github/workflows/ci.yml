@@ -45,3 +45,33 @@ jobs:
       - name: Verify image was built
         run: docker images | grep canton-mcp-server
 
+  deploy:
+    needs: [test, docker]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to production server
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: 91.99.186.83
+          SSH_USER: devops
+        run: |
+          # Setup SSH
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H $SSH_HOST >> ~/.ssh/known_hosts
+          
+          # Deploy via SSH
+          ssh -o StrictHostKeyChecking=no $SSH_USER@$SSH_HOST << 'ENDSSH'
+            set -e
+            cd /opt/canton-mcp-server || cd ~/canton-mcp-server
+            echo "📦 Pulling latest code..."
+            git pull origin main
+            echo "🐋 Rebuilding and restarting containers..."
+            docker compose down
+            docker compose up -d --build
+            echo "✅ Deployment complete!"
+            docker compose ps
+          ENDSSH
+
