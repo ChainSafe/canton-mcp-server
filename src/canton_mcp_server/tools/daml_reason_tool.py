@@ -31,7 +31,6 @@ from ..core.types.models import MCPModel
 from ..daml.safety_checker import SafetyChecker
 from ..core.direct_file_loader import DirectFileResourceLoader
 from ..core.semantic_search import DAMLSemanticSearch, create_semantic_search
-from ..env import get_env_bool
 
 logger = logging.getLogger(__name__)
 
@@ -160,7 +159,6 @@ class DamlReasonTool(Tool[DamlReasonParams, DamlReasonResult]):
         """
         business_intent = ctx.params.business_intent
         daml_code = ctx.params.daml_code
-        security_requirements = ctx.params.security_requirements or []
 
         # CASE 1: No code provided - just recommend patterns
         if not daml_code or daml_code.strip() == "":
@@ -246,8 +244,8 @@ class DamlReasonTool(Tool[DamlReasonParams, DamlReasonResult]):
                 llm_insights=safety_result.llm_insights,
                 business_intent=business_intent,
                 delegation_reason=safety_result.delegation_reason,
-                reasoning=f"Code complexity exceeds reliable analysis threshold. "
-                         f"Consider simplifying or using canonical patterns."
+                reasoning="Code complexity exceeds reliable analysis threshold. "
+                         "Consider simplifying or using canonical patterns."
             ))
             return
         

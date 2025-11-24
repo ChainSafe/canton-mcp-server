@@ -6,7 +6,6 @@ Makes random MCP tool calls at irregular intervals to test server
 availability and tool functionality.
 """
 
-import json
 import os
 import random
 import sys
@@ -143,11 +142,11 @@ def run_test_loop():
             elif "result" in result:
                 is_error = result["result"].get("isError", False)
                 if is_error:
-                    log(f"   ⚠️  Tool returned error", "WARN")
+                    log("   ⚠️  Tool returned error", "WARN")
                 else:
-                    log(f"   ✅ Tool executed successfully")
+                    log("   ✅ Tool executed successfully")
             else:
-                log(f"   ⚠️  Unexpected response format", "WARN")
+                log("   ⚠️  Unexpected response format", "WARN")
 
             # Random sleep interval
             sleep_time = random.randint(MIN_INTERVAL, MAX_INTERVAL)

@@ -9,13 +9,10 @@ Handles MCP resource protocol methods with Git verification:
 import logging
 import json
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 from pathlib import Path
 
-from ..core.responses import ErrorCodes
-from ..core.responses.resource import ResourceResponse
 from ..core.types.mcp import (
-    BlobResourceContents,
     ListResourcesResult,
     ReadResourceResult,
     Resource,

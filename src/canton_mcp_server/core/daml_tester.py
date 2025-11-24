@@ -101,7 +101,7 @@ class DAMLTester:
             else:
                 logger.warning(f"❌ {test_result}")
                 if test_result.failures:
-                    logger.warning(f"Failures:")
+                    logger.warning("Failures:")
                     for failure in test_result.failures:
                         logger.warning(f"  - {failure}")
             

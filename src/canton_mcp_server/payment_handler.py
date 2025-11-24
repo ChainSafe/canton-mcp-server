@@ -688,7 +688,6 @@ class PaymentHandler:
         """Settle Canton payment via Canton facilitator with retry logic"""
         import httpx
         
-        payment = request.state.x402_payment
         requirements = request.state.x402_requirements
         
         # Re-extract payment_dict from request header for Canton

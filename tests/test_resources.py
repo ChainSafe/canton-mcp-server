@@ -20,7 +20,6 @@ from canton_mcp_server.core.resources.base import (
     PatternResource,
     AntiPatternResource,
     RuleResource,
-    DocResource,
     ResourceCategory,
     parse_canton_uri,
 )

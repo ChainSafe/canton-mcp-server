@@ -240,7 +240,6 @@ class DAMLSemanticSearch:
             return []
         
         # Diagnostic: Log what we're searching for
-        import hashlib
         code_hash = hashlib.md5(code.encode()).hexdigest()[:8]
         code_preview = code[:100].replace("\n", " ").strip()
         logger.info(f"🔍 Searching ChromaDB with code (hash: {code_hash}, preview: '{code_preview}...')")

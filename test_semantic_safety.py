@@ -5,7 +5,6 @@ Test script for the refactored SafetyChecker with semantic search and LLM reason
 
 import asyncio
 import os
-from pathlib import Path
 
 # Set environment variables
 os.environ["CANONICAL_DOCS_PATH"] = "/Users/martinmaurer/Projects/Martin/canonical-daml-docs"

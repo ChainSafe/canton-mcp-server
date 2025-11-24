@@ -16,7 +16,6 @@ from ..core.types import (
     ListPromptsResult,
     ListResourcesResult,
     Prompt,
-    PromptArgument,
 )
 
 logger = logging.getLogger(__name__)

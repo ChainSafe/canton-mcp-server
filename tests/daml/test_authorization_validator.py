@@ -4,7 +4,6 @@ Tests for AuthorizationValidator
 Unit tests for DAML authorization model extraction and validation.
 """
 
-import pytest
 
 from canton_mcp_server.daml.authorization_validator import AuthorizationValidator
 from canton_mcp_server.daml.types import CompilationResult, CompilationStatus

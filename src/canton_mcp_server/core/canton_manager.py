@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import Dict, Optional, Any, List
 
 import docker
-import requests
 from docker.models.containers import Container
 
 logger = logging.getLogger(__name__)
@@ -225,7 +224,7 @@ canton {{
             )
             
             # Wait for Canton to be ready
-            logger.info(f"⏳ Waiting for Canton to be ready...")
+            logger.info("⏳ Waiting for Canton to be ready...")
             logger.debug(f"Container ID: {container.id}")
             logger.debug(f"Container name: {container.name}")
             logger.debug(f"Container status: {container.status}")
@@ -263,7 +262,7 @@ canton {{
                 container.stop()
                 container.remove()
                 raise RuntimeError(
-                    f"Canton failed to start within timeout. Check logs above."
+                    "Canton failed to start within timeout. Check logs above."
                 )
             
             self.environments[env_id] = env

@@ -2,10 +2,7 @@
 Tests for enhanced Resource Loader with hot-reload functionality
 """
 
-import os
 import tempfile
-import time
-import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -14,7 +11,6 @@ from canton_mcp_server.core.resources.loader import (
     ResourceFileHandler,
     get_loader,
     load_resources,
-    reload_resources,
     stop_hot_reload,
 )
 from canton_mcp_server.core.resources.base import ResourceCategory

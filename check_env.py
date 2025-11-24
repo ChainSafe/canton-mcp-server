@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 # Try to load .env.canton
 env_path = Path(".env.canton")
 if env_path.exists():
-    print(f"✓ Found .env.canton")
+    print("✓ Found .env.canton")
     load_dotenv(env_path)
     key = os.getenv("ANTHROPIC_API_KEY", "")
     if key:

@@ -190,7 +190,7 @@ class DamlAutomaterTool(Tool[DamlAutomaterParams, DamlAutomaterResult]):
         json_port = config.get('json_api_port', 7575)
         canton_image = config.get('canton_image', 'digitalasset/canton-open-source:latest')
         
-        logger.info(f"🚀 Spinning up Canton sandbox...")
+        logger.info("🚀 Spinning up Canton sandbox...")
         
         env = await self._canton_manager.spin_up_docker(
             dar_path=dar_path,
@@ -548,7 +548,7 @@ dependencies:
         
         try:
             daml_yaml.write_text(daml_yaml_content)
-            logger.info(f"✅ Created daml.yaml")
+            logger.info("✅ Created daml.yaml")
         except Exception as e:
             return DamlAutomaterResult(
                 success=False,
@@ -561,7 +561,7 @@ dependencies:
         daml_dir = project_path / "daml"
         try:
             daml_dir.mkdir(exist_ok=True)
-            logger.info(f"✅ Created daml/ directory")
+            logger.info("✅ Created daml/ directory")
         except Exception as e:
             return DamlAutomaterResult(
                 success=False,
@@ -587,7 +587,7 @@ template Placeholder
 """
             try:
                 main_daml.write_text(main_daml_content)
-                logger.info(f"✅ Created Main.daml placeholder")
+                logger.info("✅ Created Main.daml placeholder")
             except Exception as e:
                 logger.warning(f"Failed to create Main.daml: {e}")
         

@@ -9,13 +9,16 @@ import hashlib
 import json
 import logging
 from datetime import datetime
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from .audit_trail import AuditTrail
 from .authorization_validator import AuthorizationValidator
 from .daml_compiler_integration import DamlCompiler
 from .type_safety_verifier import TypeSafetyVerifier
 from .types import CompilationStatus, SafetyCheckResult
+
+if TYPE_CHECKING:
+    from ..core.semantic_search import DAMLSemanticSearch
 
 logger = logging.getLogger(__name__)
 
@@ -338,7 +341,6 @@ FILE {i}: {file.get('file_path', 'unknown')} (similarity: {file.get('similarity_
         if auth_extraction.llm_full_response:
             # Extract any text outside the JSON as insights
             try:
-                import json as json_lib
                 full_text = auth_extraction.llm_full_response
                 first_brace = full_text.find('{')
                 last_brace = full_text.rfind('}')

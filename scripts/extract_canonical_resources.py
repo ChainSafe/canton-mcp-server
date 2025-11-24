@@ -79,7 +79,7 @@ def main():
         
         # Print summary
         total_resources = sum(len(resource_list) for resource_list in resources.values())
-        logger.info(f"Extraction complete!")
+        logger.info("Extraction complete!")
         logger.info(f"Total resources extracted: {total_resources}")
         
         for resource_type, resource_list in resources.items():

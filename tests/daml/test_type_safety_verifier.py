@@ -4,7 +4,6 @@ Tests for TypeSafetyVerifier
 Unit tests for DAML type safety error analysis.
 """
 
-import pytest
 
 from canton_mcp_server.daml.type_safety_verifier import TypeSafetyVerifier
 from canton_mcp_server.daml.types import (

@@ -4,12 +4,10 @@ Tests for AuditTrail
 Unit tests for DAML compilation audit logging.
 """
 
-import json
 import tempfile
 from datetime import datetime
 from pathlib import Path
 
-import pytest
 
 from canton_mcp_server.daml.audit_trail import AuditTrail
 from canton_mcp_server.daml.types import (
@@ -39,7 +37,7 @@ class TestAuditTrail:
     def test_init_creates_storage_directory(self):
         """Test initialization creates storage directory"""
         new_path = self.storage_path / "subdir"
-        audit = AuditTrail(storage_path=new_path)
+        _audit = AuditTrail(storage_path=new_path)  # Trigger initialization side effect
 
         assert new_path.exists()
         assert new_path.is_dir()

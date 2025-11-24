@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from canton_mcp_server import tools  # noqa: F401
-from canton_mcp_server.core import RequestManager, get_registry
+from canton_mcp_server.core import get_registry
 from canton_mcp_server.core.responses import (
     ErrorCodes,
     PromptResponse,
@@ -33,7 +33,6 @@ from canton_mcp_server.handlers import (
     handle_initialized,
     handle_ping,
     handle_prompts_list,
-    handle_resources_list,
     handle_set_level,
     handle_tools_call,
     handle_tools_list,
@@ -72,10 +71,6 @@ async def lifespan(app: FastAPI):
     """Startup and shutdown logic for the Canton MCP server"""
     # Startup
     logger.info("Starting Canton MCP Server...")
-
-    # Check if we're in development mode (hot-reload enabled)
-    import os
-    enable_hot_reload = os.getenv("CANTON_HOT_RELOAD", "false").lower() == "true"
 
     # Log registered tools
     registry = get_registry()

@@ -69,7 +69,7 @@ class TypeSafetyVerifier:
             result[error.category].append(error)
 
         logger.debug(
-            f"Error classification: "
+            "Error classification: "
             + ", ".join(f"{cat.value}={len(errs)}" for cat, errs in result.items())
         )
 

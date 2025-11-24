@@ -9,7 +9,6 @@ Features:
 - Hot-reload support with git pull detection
 """
 
-import os
 import subprocess
 import logging
 import json
