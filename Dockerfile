@@ -37,7 +37,6 @@ COPY --from=builder --chown=canton:canton /app/.venv /app/.venv
 # Copy application code
 COPY --chown=canton:canton pyproject.toml uv.lock README.md ./
 COPY --chown=canton:canton src/ ./src/
-COPY --chown=canton:canton resources/ ./resources/
 COPY --chown=canton:canton schemas/ ./schemas/
 
 # Switch to non-root user
