@@ -6,6 +6,9 @@ services:
     container_name: canton-mcp-server
     ports:
       - "7284:7284"
+    env_file:
+      - path: .env.canton
+        required: false
     volumes:
       # Mount canonical DAML documentation repositories (read-only)
       - /opt/canonical-daml-docs-daml:/opt/canonical-daml-docs/daml:ro
