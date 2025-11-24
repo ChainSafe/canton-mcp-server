@@ -34,6 +34,11 @@ RUN useradd -m -u 1000 canton && \
     mkdir -p /app && \
     chown -R canton:canton /app
 
+# Configure git to trust mounted canonical repos (fixes ownership security check)
+RUN git config --system --add safe.directory /opt/canonical-daml-docs/daml && \
+    git config --system --add safe.directory /opt/canonical-daml-docs/canton && \
+    git config --system --add safe.directory /opt/canonical-daml-docs/daml-finance
+
 WORKDIR /app
 
 # Copy installed dependencies from builder
