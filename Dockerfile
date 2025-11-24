@@ -21,6 +21,11 @@ RUN uv sync --frozen --no-dev
 # Final stage
 FROM python:3.12-slim
 
+# Install system dependencies (git for canonical repo verification)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends git && \
+    rm -rf /var/lib/apt/lists/*
+
 # Install uv in final stage
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
