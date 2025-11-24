@@ -155,14 +155,17 @@ template SimpleIOU
             status=CompilationStatus.SUCCESS, exit_code=0
         )
 
-        auth_model = self.validator.extract_auth_model(code, compilation_result)
+        result = self.validator.extract_auth_model(code, compilation_result)
 
-        assert auth_model is not None
-        assert auth_model.template_name == "SimpleIOU"
-        assert auth_model.signatories == ["issuer"]
-        assert auth_model.observers == ["owner"]
-        assert "Transfer" in auth_model.controllers
-        assert auth_model.controllers["Transfer"] == ["owner"]
+        # New API returns AuthorizationExtractionResult wrapper
+        assert result is not None
+        assert result.model is not None
+        assert result.model.template_name == "SimpleIOU"
+        assert result.model.signatories == ["issuer"]
+        assert result.model.observers == ["owner"]
+        assert "Transfer" in result.model.controllers
+        assert result.model.controllers["Transfer"] == ["owner"]
+        assert result.confidence > 0.0  # Should have some confidence
 
     def test_extract_auth_model_failed_compilation(self):
         """Test that extraction is skipped for failed compilation"""
@@ -171,9 +174,13 @@ template SimpleIOU
             status=CompilationStatus.FAILED, exit_code=1
         )
 
-        auth_model = self.validator.extract_auth_model(code, compilation_result)
+        result = self.validator.extract_auth_model(code, compilation_result)
 
-        assert auth_model is None
+        # New API returns AuthorizationExtractionResult with model=None
+        assert result is not None  # Result object exists
+        assert result.model is None  # But model extraction failed
+        assert result.confidence == 0.0
+        assert result.method == "compilation_failed"
 
     def test_validate_authorization_valid(self):
         """Test validation of valid authorization model"""
