@@ -56,8 +56,9 @@ class SafetyChecker:
         """
         from ..env import get_env, get_env_bool, get_env_float
         
-        sdk_version = get_env("DAML_SDK_VERSION", "3.4.0-snapshot.20251013.0")
-        self.compiler = compiler or DamlCompiler(sdk_version=sdk_version)
+        # Store compiler or config for lazy initialization
+        self._compiler = compiler
+        self._sdk_version = get_env("DAML_SDK_VERSION", "3.4.0-snapshot.20251013.0")
         
         # Initialize AuthorizationValidator with LLM support if enabled
         if auth_validator is None:
@@ -87,6 +88,13 @@ class SafetyChecker:
         self._raw_resources = None
 
         logger.info("Safety checker initialized (Gate 1: DAML Compiler Safety)")
+
+    @property
+    def compiler(self) -> DamlCompiler:
+        """Lazy initialization of DAML compiler."""
+        if self._compiler is None:
+            self._compiler = DamlCompiler(sdk_version=self._sdk_version)
+        return self._compiler
 
     def _ensure_semantic_search(self):
         """Lazy initialization of semantic search with raw resources."""
