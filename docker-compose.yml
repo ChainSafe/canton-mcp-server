@@ -14,6 +14,8 @@ services:
     environment:
       # Server configuration
       - MCP_SERVER_URL=http://localhost:7284
+      # Canonical DAML documentation path
+      - CANONICAL_DOCS_PATH=/opt/canonical-daml-docs
       # DCAP (Performance Tracking) - adjust as needed
       - DCAP_ENABLED=${DCAP_ENABLED:-true}
       - DCAP_MULTICAST_IP=${DCAP_MULTICAST_IP:-159.89.110.236}
