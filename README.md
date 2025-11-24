@@ -1398,3 +1398,4 @@ The Canton MCP Server implements a comprehensive safety-first architecture:
 - [Canton](https://www.digitalasset.com/developers) - The Canton blockchain platform
 - [DAML](https://docs.daml.com/) - The DAML smart contract language
 - [DCAP]([https://dcap.dev](https://github.com/boorich/dcap)) - Performance tracking protocol (if available)
+# Test auto-deploy
