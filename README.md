@@ -1,5 +1,7 @@
 # Canton MCP Server
 
+[![CI](https://github.com/ChainSafe/canton-mcp-server/actions/workflows/ci.yml/badge.svg)](https://github.com/ChainSafe/canton-mcp-server/actions/workflows/ci.yml)
+
 A **DAML-Safe by Construction** development platform that generates provably safe DAML code using verified canonical resources, DAML compiler integration, and Haskell's formal verification capabilities.
 
 ## Core Philosophy: "DAML-Safe by Construction"

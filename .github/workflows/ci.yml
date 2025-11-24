@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run linting
+        run: uv run ruff check .
+
+      - name: Run type checking
+        run: uv run mypy src/
+        continue-on-error: true  # Don't fail on type errors yet
+
+      - name: Run tests
+        run: uv run pytest tests/ -v
+        continue-on-error: true  # Don't fail on test errors yet (no tests written)
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker-compose build
+
+      - name: Start services
+        run: docker-compose up -d
+
+      - name: Wait for server to be ready
+        run: sleep 10
+
+      - name: Health check
+        run: |
+          curl -f http://localhost:7284/health || (docker-compose logs && exit 1)
+
+      - name: Test MCP endpoint
+        run: |
+          curl -f -X POST http://localhost:7284/mcp \
+            -H "Content-Type: application/json" \
+            -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' \
+            | grep -q "daml_reason" || (docker-compose logs && exit 1)
+
+      - name: Cleanup
+        if: always()
+        run: docker-compose down
+
