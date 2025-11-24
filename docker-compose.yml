@@ -6,6 +6,11 @@ services:
     container_name: canton-mcp-server
     ports:
       - "7284:7284"
+    volumes:
+      # Mount canonical DAML documentation repositories (read-only)
+      - /opt/canonical-daml-docs-daml:/opt/canonical-daml-docs/daml:ro
+      - /opt/canonical-daml-docs-canton:/opt/canonical-daml-docs/canton:ro
+      - /opt/canonical-daml-docs-daml-finance:/opt/canonical-daml-docs/daml-finance:ro
     environment:
       # Server configuration
       - MCP_SERVER_URL=http://localhost:7284
