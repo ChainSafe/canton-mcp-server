@@ -67,7 +67,10 @@ jobs:
             set -e
             cd /opt/canton-mcp-server || cd ~/canton-mcp-server
             echo "📦 Pulling latest code..."
-            git pull origin main
+            # Stash any local changes and force sync with main
+            git fetch origin
+            git stash || true
+            git reset --hard origin/main
             echo "🐋 Rebuilding and restarting containers..."
             docker compose down
             docker compose up -d --build
