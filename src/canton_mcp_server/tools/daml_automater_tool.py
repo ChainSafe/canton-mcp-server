@@ -1,24 +1,23 @@
 """
-DAML Automater Tool - CI/CD and Environment Automation
+DAML Automater Tool - CI/CD and Environment Automation Instructions
 
-This tool handles DAML development automation tasks such as:
+This tool provides guidance for DAML development automation tasks such as:
 - Spinning up local Canton environments
 - Running tests in CI/CD
 - Building DAML projects
 - Managing Canton network connections
 - Automating builds and deployments
+
+NOTE: This tool returns INSTRUCTIONS for client-side execution, not server-side operations.
+The MCP server does not have DAML SDK or Docker installed.
 """
 
 import logging
-from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 from pydantic import Field
 
 from ..core import Tool, ToolContext, register_tool
-from ..core.canton_manager import CantonManager
-from ..core.daml_builder import DAMLBuilder
-from ..core.daml_tester import DAMLTester
 from ..core.pricing import PricingType, ToolPricing
 from ..core.types.models import MCPModel
 
@@ -59,25 +58,30 @@ class DamlAutomaterResult(MCPModel):
     success: bool = Field(description="Whether the automation action succeeded")
     action: str = Field(description="The action that was performed")
     message: str = Field(description="Result message")
+    commands: List[str] = Field(default=[], description="Shell commands for client to execute")
+    instructions: str = Field(default="", description="Human-readable instructions for the client")
     details: Optional[dict] = Field(default=None, description="Additional details about the result")
 
 
 @register_tool
 class DamlAutomaterTool(Tool[DamlAutomaterParams, DamlAutomaterResult]):
     """
-    DAML Automater - CI/CD and Environment Automation
+    DAML Automater - CI/CD and Environment Automation Instructions
     
-    Handles automation tasks for DAML development:
-    - Spin up local Canton environments using Docker
-    - Run automated tests
-    - Build DAML projects to DAR files
-    - Manage Canton environment lifecycle
+    Provides client-side automation guidance for DAML development:
+    - Instructions for spinning up local Canton environments
+    - Commands for running automated tests
+    - Steps for building DAML projects to DAR files
+    - Canton environment lifecycle management guidance
+    
+    NOTE: This tool returns INSTRUCTIONS for the client to execute locally,
+    not server-side execution. The MCP server does not have DAML SDK or Docker.
     """
 
     name = "daml_automater"
     description = (
-        "🤖 DAML Automater - CI/CD and environment automation. "
-        "Spins up Canton environments in Docker, runs tests, and builds projects."
+        "🤖 DAML Automater - CI/CD and environment automation instructions. "
+        "Provides commands and guidance for Canton environments, tests, and builds (client-side execution)."
     )
     params_model = DamlAutomaterParams
     result_model = DamlAutomaterResult
@@ -85,69 +89,55 @@ class DamlAutomaterTool(Tool[DamlAutomaterParams, DamlAutomaterResult]):
     pricing = ToolPricing(
         type=PricingType.FIXED,
         base_cost=0.0,
-        description="Automation actions (free)"
+        description="Automation guidance (free)"
     )
     
     def __init__(self):
-        """Initialize automation managers"""
+        """Initialize automation tool"""
         super().__init__()
-        self._canton_manager: Optional[CantonManager] = None
-        self._daml_builder: Optional[DAMLBuilder] = None
-        self._daml_tester: Optional[DAMLTester] = None
-    
-    def _ensure_managers(self):
-        """Lazy initialization of managers"""
-        if self._canton_manager is None:
-            self._canton_manager = CantonManager()
-        if self._daml_builder is None:
-            self._daml_builder = DAMLBuilder()
-        if self._daml_tester is None:
-            self._daml_tester = DAMLTester()
 
     async def execute(
         self, ctx: ToolContext[DamlAutomaterParams, DamlAutomaterResult]
     ):
         """
-        Execute DAML automation action.
+        Provide DAML automation instructions for client-side execution.
         
         Supported actions:
-        - spin_up_env: Start Canton sandbox in Docker
-        - run_tests: Execute DAML tests
-        - build_dar: Build DAML project to DAR
-        - status: Check Canton environment status
-        - teardown_env: Stop and remove Canton environment
-        - check_project: Verify if valid DAML project exists
-        - init_project: Initialize boilerplate DAML project structure
+        - spin_up_env: Instructions to start Canton sandbox locally
+        - run_tests: Commands to execute DAML tests
+        - build_dar: Commands to build DAML project to DAR
+        - status: Commands to check Canton environment status
+        - teardown_env: Commands to stop Canton environment
+        - check_project: Commands to verify DAML project validity
+        - init_project: Commands to initialize DAML project structure
         """
         action = ctx.params.action
         environment = ctx.params.environment or "local"
         config = ctx.params.config or {}
         
-        logger.info(f"🤖 DAML Automater: action={action}, environment={environment}")
-        
-        # Ensure managers are initialized
-        self._ensure_managers()
+        logger.info(f"🤖 DAML Automater: providing guidance for action={action}, environment={environment}")
         
         try:
             if action == "spin_up_env":
-                result = await self._spin_up_env(config)
+                result = self._spin_up_env_instructions(config)
             elif action == "run_tests":
-                result = await self._run_tests(config)
+                result = self._run_tests_instructions(config)
             elif action == "build_dar":
-                result = await self._build_dar(config)
+                result = self._build_dar_instructions(config)
             elif action == "status":
-                result = await self._get_status(config)
+                result = self._get_status_instructions(config)
             elif action == "teardown_env":
-                result = await self._teardown_env(config)
+                result = self._teardown_env_instructions(config)
             elif action == "check_project":
-                result = await self._check_project(config)
+                result = self._check_project_instructions(config)
             elif action == "init_project":
-                result = await self._init_project(config)
+                result = self._init_project_instructions(config)
             else:
                 result = DamlAutomaterResult(
                     success=False,
                     action=action,
                     message=f"Unknown action: {action}",
+                    instructions="Please use one of the available actions.",
                     details={
                         "available_actions": [
                             "spin_up_env",
@@ -164,61 +154,79 @@ class DamlAutomaterTool(Tool[DamlAutomaterParams, DamlAutomaterResult]):
             yield ctx.structured(result)
             
         except Exception as e:
-            logger.error(f"❌ Automation failed: {e}", exc_info=True)
+            logger.error(f"❌ Failed to generate instructions: {e}", exc_info=True)
             yield ctx.structured(DamlAutomaterResult(
                 success=False,
                 action=action,
-                message=f"Error: {str(e)}",
+                message=f"Error generating instructions: {str(e)}",
+                instructions="Unable to provide automation guidance at this time.",
                 details={
                     "error_type": type(e).__name__,
                     "error_message": str(e)
                 }
             ))
     
-    async def _spin_up_env(self, config: dict) -> DamlAutomaterResult:
+    def _spin_up_env_instructions(self, config: dict) -> DamlAutomaterResult:
         """
-        Spin up Canton sandbox environment in Docker.
+        Provide instructions to spin up Canton sandbox environment locally.
         
         Config options:
         - dar_path: Optional path to DAR file to preload
         - ledger_api_port: Port for Ledger API (default: 6865)
         - json_api_port: Port for JSON API (default: 7575)
-        - canton_image: Docker image to use (default: digitalasset/canton-open-source:latest)
         """
         dar_path = config.get('dar_path')
         ledger_port = config.get('ledger_api_port', 6865)
-        json_port = config.get('json_api_port', 7575)
-        canton_image = config.get('canton_image', 'digitalasset/canton-open-source:latest')
         
-        logger.info("🚀 Spinning up Canton sandbox...")
+        commands = [
+            f"daml sandbox --port {ledger_port}"
+        ]
         
-        env = await self._canton_manager.spin_up_docker(
-            dar_path=dar_path,
-            ledger_port=ledger_port,
-            json_port=json_port,
-            canton_image=canton_image
-        )
+        if dar_path:
+            commands[0] += f" --dar {dar_path}"
+        
+        instructions = f"""To start a local Canton sandbox:
+
+1. **Start the sandbox:**
+   ```bash
+   {commands[0]}
+   ```
+
+2. **Verify it's running:**
+   - Ledger API will be available at `localhost:{ledger_port}`
+   - You should see "Started Canton Sandbox" in the output
+
+3. **Keep the terminal open** - the sandbox runs in the foreground
+
+**What this does:**
+- Starts an in-memory Canton ledger for development
+- Exposes Ledger API on port {ledger_port}
+{"- Preloads your DAR file automatically" if dar_path else ""}
+
+**Prerequisites:**
+- DAML SDK installed (`daml version` to check)
+- Port {ledger_port} available
+"""
         
         return DamlAutomaterResult(
             success=True,
             action="spin_up_env",
-            message=f"✅ Canton sandbox started: {env.env_id}",
+            message="📋 Instructions to start Canton sandbox",
+            commands=commands,
+            instructions=instructions,
             details={
-                "env_id": env.env_id,
-                "ledger_api_endpoint": f"localhost:{env.ledger_port}",
-                "json_api_endpoint": f"http://localhost:{env.json_port}",
-                "health_status": "ready",
-                "started_at": env.started_at.isoformat(),
-                "dar_loaded": dar_path is not None
+                "ledger_port": ledger_port,
+                "dar_path": dar_path,
+                "method": "daml_sandbox"
             }
         )
     
-    async def _run_tests(self, config: dict) -> DamlAutomaterResult:
+    def _run_tests_instructions(self, config: dict) -> DamlAutomaterResult:
         """
-        Run DAML tests for a project.
+        Provide instructions to run DAML tests for a project.
         
         Config options:
-        - project_path: Absolute path to DAML project (REQUIRED)
+        - project_path: Path to DAML project (REQUIRED)
         - test_filter: Optional filter for specific tests
         """
         project_path_str = config.get('project_path')
@@ -226,162 +234,268 @@ class DamlAutomaterTool(Tool[DamlAutomaterParams, DamlAutomaterResult]):
             return DamlAutomaterResult(
                 success=False,
                 action="run_tests",
-                message="❌ Missing required config: project_path (must be absolute path to DAML project)",
+                message="❌ Missing required config: project_path",
+                instructions="Please provide the path to your DAML project directory.",
                 details={
                     "error": "project_path is required",
                     "example": {"project_path": "/Users/you/my-daml-project"}
                 }
             )
         
-        project_path = Path(project_path_str)
         test_filter = config.get('test_filter')
         
-        logger.info(f"🧪 Running DAML tests: {project_path}")
-        
-        test_result = await self._daml_tester.run_tests(
-            project_path=project_path,
-            test_filter=test_filter
-        )
-        
-        if test_result.success:
-            message = f"✅ All tests passed ({test_result.tests_passed}/{test_result.tests_run})"
+        commands = ["cd " + project_path_str]
+        if test_filter:
+            commands.append(f"daml test -- -m {test_filter}")
         else:
-            message = f"❌ Tests failed ({test_result.tests_failed}/{test_result.tests_run} failures)"
+            commands.append("daml test")
+        
+        instructions = f"""To run DAML tests in your project:
+
+1. **Navigate to your project:**
+   ```bash
+   cd {project_path_str}
+   ```
+
+2. **Run the tests:**
+   ```bash
+   {commands[1]}
+   ```
+
+**What this does:**
+- Compiles your DAML project
+- Executes all test scenarios
+{"- Filters tests matching: " + test_filter if test_filter else "- Runs all tests in the project"}
+- Reports pass/fail status
+
+**Expected output:**
+```
+Compiling...
+Running tests...
+✅ All 5 tests passed
+```
+
+**Common issues:**
+- If tests fail, check the error messages for assertion failures
+- Ensure your `daml.yaml` has proper dependencies
+- Use `daml build` first to check for compilation errors
+"""
         
         return DamlAutomaterResult(
-            success=test_result.success,
+            success=True,
             action="run_tests",
-            message=message,
+            message="📋 Instructions to run DAML tests",
+            commands=commands,
+            instructions=instructions,
             details={
-                "tests_run": test_result.tests_run,
-                "tests_passed": test_result.tests_passed,
-                "tests_failed": test_result.tests_failed,
-                "duration_seconds": test_result.duration_seconds,
-                "failures": test_result.failures,
-                "output_preview": test_result.output[:500] if test_result.output else ""
+                "project_path": project_path_str,
+                "test_filter": test_filter
             }
         )
     
-    async def _build_dar(self, config: dict) -> DamlAutomaterResult:
+    def _build_dar_instructions(self, config: dict) -> DamlAutomaterResult:
         """
-        Build DAML project to DAR file.
+        Provide instructions to build DAML project to DAR file.
         
         Config options:
-        - project_path: Absolute path to DAML project (REQUIRED)
+        - project_path: Path to DAML project (REQUIRED)
         """
         project_path_str = config.get('project_path')
         if not project_path_str:
             return DamlAutomaterResult(
                 success=False,
                 action="build_dar",
-                message="❌ Missing required config: project_path (must be absolute path to DAML project)",
+                message="❌ Missing required config: project_path",
+                instructions="Please provide the path to your DAML project directory.",
                 details={
                     "error": "project_path is required",
                     "example": {"project_path": "/Users/you/my-daml-project"}
                 }
             )
         
-        project_path = Path(project_path_str)
+        commands = [
+            f"cd {project_path_str}",
+            "daml build"
+        ]
         
-        logger.info(f"🔨 Building DAML project: {project_path}")
-        
-        project = await self._daml_builder.build(project_path)
-        
-        dar_size_kb = project.dar_path.stat().st_size / 1024 if project.dar_path else 0
+        instructions = f"""To build your DAML project into a DAR file:
+
+1. **Navigate to your project:**
+   ```bash
+   cd {project_path_str}
+   ```
+
+2. **Build the project:**
+   ```bash
+   daml build
+   ```
+
+**What this does:**
+- Compiles all DAML modules in the `daml/` directory
+- Type-checks and validates your code
+- Packages everything into a DAR (DAML Archive) file
+- Outputs to `.daml/dist/<project-name>-<version>.dar`
+
+**Expected output:**
+```
+Compiling my-project to a DAR.
+Created .daml/dist/my-project-1.0.0.dar
+```
+
+**The DAR file:**
+- Contains all compiled DAML code
+- Can be deployed to Canton ledgers
+- Can be used in DAML scripts
+- Is fully self-contained and portable
+
+**Next steps after building:**
+- Deploy: `daml ledger upload-dar .daml/dist/your-project.dar`
+- Run scripts: `daml script --dar .daml/dist/your-project.dar ...`
+"""
         
         return DamlAutomaterResult(
             success=True,
             action="build_dar",
-            message=f"✅ Built DAR: {project.dar_path.name}",
+            message="📋 Instructions to build DAML project",
+            commands=commands,
+            instructions=instructions,
             details={
-                "dar_path": str(project.dar_path),
-                "dar_size_kb": round(dar_size_kb, 1),
-                "project_name": project.name,
-                "version": project.version,
-                "sdk_version": project.sdk_version
+                "project_path": project_path_str,
+                "output_location": ".daml/dist/"
             }
         )
     
-    async def _get_status(self, config: dict) -> DamlAutomaterResult:
+    def _get_status_instructions(self, config: dict) -> DamlAutomaterResult:
         """
-        Get status of Canton environments.
+        Provide instructions to check Canton environment status.
         
         Config options:
-        - env_id: Optional specific environment ID to check
+        - ledger_port: Port where Canton is running (default: 6865)
         """
-        env_id = config.get('env_id')
+        ledger_port = config.get('ledger_api_port', 6865)
         
-        if env_id:
-            # Get specific environment status
-            status = self._canton_manager.get_status(env_id)
-            if not status.get('exists'):
-                return DamlAutomaterResult(
-                    success=False,
-                    action="status",
-                    message=f"❌ Environment not found: {env_id}",
-                    details={"env_id": env_id}
-                )
-            
-            return DamlAutomaterResult(
-                success=True,
-                action="status",
-                message=f"Environment status: {env_id}",
-                details=status
-            )
-        else:
-            # List all environments
-            envs = self._canton_manager.list_environments()
-            
-            if not envs:
-                return DamlAutomaterResult(
-                    success=True,
-                    action="status",
-                    message="No Canton environments running",
-                    details={"environments": []}
-                )
-            
-            return DamlAutomaterResult(
-                success=True,
-                action="status",
-                message=f"{len(envs)} Canton environment(s) running",
-                details={"environments": envs, "count": len(envs)}
-            )
+        commands = [
+            f"curl -s http://localhost:{ledger_port}/livez || echo 'Canton not running'",
+            "ps aux | grep 'daml sandbox' | grep -v grep"
+        ]
+        
+        instructions = f"""To check if Canton sandbox is running:
+
+**Method 1: Check the process**
+```bash
+ps aux | grep 'daml sandbox' | grep -v grep
+```
+- If you see output, Canton is running
+- Note the process ID (PID) in the second column
+
+**Method 2: Check if port is in use**
+```bash
+lsof -i :{ledger_port}
+```
+- If you see output, something is listening on port {ledger_port}
+- Should show `daml` or `java` process
+
+**Method 3: Try connecting**
+```bash
+curl -s http://localhost:{ledger_port}/livez
+```
+- Canton health endpoint (if available)
+- Returns JSON status if running
+
+**Visual check:**
+- Look for a terminal window with Canton sandbox running
+- You should see log output if it's active
+
+**If not running:**
+- Use the `spin_up_env` action to start Canton
+- Or manually run: `daml sandbox --port {ledger_port}`
+"""
+        
+        return DamlAutomaterResult(
+            success=True,
+            action="status",
+            message="📋 Instructions to check Canton status",
+            commands=commands,
+            instructions=instructions,
+            details={
+                "ledger_port": ledger_port,
+                "check_methods": ["ps", "lsof", "curl"]
+            }
+        )
     
-    async def _teardown_env(self, config: dict) -> DamlAutomaterResult:
+    def _teardown_env_instructions(self, config: dict) -> DamlAutomaterResult:
         """
-        Teardown Canton environment(s).
+        Provide instructions to stop Canton environment.
         
         Config options:
-        - env_id: Specific environment ID to teardown (if not provided, tears down all)
+        - ledger_port: Port where Canton is running (default: 6865)
         """
-        env_id = config.get('env_id')
+        ledger_port = config.get('ledger_api_port', 6865)
         
-        if env_id:
-            logger.info(f"🧹 Tearing down environment: {env_id}")
-            await self._canton_manager.teardown(env_id)
-            message = f"✅ Stopped environment: {env_id}"
-            details = {"env_id": env_id}
-        else:
-            # Teardown all
-            envs = list(self._canton_manager.environments.keys())
-            logger.info(f"🧹 Tearing down {len(envs)} environment(s)")
-            await self._canton_manager.teardown_all()
-            message = f"✅ Stopped {len(envs)} environment(s)"
-            details = {"environments_stopped": envs, "count": len(envs)}
+        commands = [
+            "# Find the Canton process",
+            "ps aux | grep 'daml sandbox' | grep -v grep",
+            "# Kill it (replace <PID> with the actual process ID)",
+            "kill <PID>",
+            "# Or use pkill to kill by name",
+            "pkill -f 'daml sandbox'"
+        ]
+        
+        instructions = f"""To stop a running Canton sandbox:
+
+**Method 1: Interactive stop (recommended)**
+1. Go to the terminal where Canton is running
+2. Press `Ctrl+C` to gracefully stop it
+3. Wait for shutdown messages
+
+**Method 2: Kill by process ID**
+```bash
+# Find the process
+ps aux | grep 'daml sandbox' | grep -v grep
+
+# Kill it (replace <PID> with actual number from second column)
+kill <PID>
+```
+
+**Method 3: Kill by name**
+```bash
+pkill -f 'daml sandbox'
+```
+
+**Verify it stopped:**
+```bash
+lsof -i :{ledger_port}
+```
+- Should return nothing if Canton is stopped
+
+**Clean shutdown vs force kill:**
+- `Ctrl+C` or `kill <PID>` = graceful shutdown (recommended)
+- `kill -9 <PID>` = force kill (use only if frozen)
+
+**After stopping:**
+- Port {ledger_port} will be released
+- In-memory data will be lost (expected for sandbox)
+- You can start a fresh sandbox anytime
+"""
         
         return DamlAutomaterResult(
             success=True,
             action="teardown_env",
-            message=message,
-            details=details
+            message="📋 Instructions to stop Canton sandbox",
+            commands=commands,
+            instructions=instructions,
+            details={
+                "ledger_port": ledger_port,
+                "methods": ["interactive", "kill_pid", "pkill"]
+            }
         )
     
-    async def _check_project(self, config: dict) -> DamlAutomaterResult:
+    def _check_project_instructions(self, config: dict) -> DamlAutomaterResult:
         """
-        Check if valid DAML project exists at path.
+        Provide instructions to check if valid DAML project exists at path.
         
         Config options:
-        - project_path: Absolute path to directory to check (REQUIRED)
+        - project_path: Path to directory to check (REQUIRED)
         """
         project_path_str = config.get('project_path')
         if not project_path_str:
@@ -389,109 +503,83 @@ class DamlAutomaterTool(Tool[DamlAutomaterParams, DamlAutomaterResult]):
                 success=False,
                 action="check_project",
                 message="❌ Missing required config: project_path",
+                instructions="Please provide the path to check for a DAML project.",
                 details={
                     "error": "project_path is required",
                     "example": {"project_path": "/Users/you/my-daml-project"}
                 }
             )
         
-        project_path = Path(project_path_str)
+        commands = [
+            f"cd {project_path_str}",
+            "ls -la",
+            "cat daml.yaml"
+        ]
         
-        logger.info(f"🔍 Checking DAML project: {project_path}")
+        instructions = f"""To check if a valid DAML project exists:
+
+1. **Check if directory exists:**
+   ```bash
+   ls -ld {project_path_str}
+   ```
+
+2. **Look for daml.yaml:**
+   ```bash
+   ls {project_path_str}/daml.yaml
+   ```
+
+3. **View project configuration:**
+   ```bash
+   cat {project_path_str}/daml.yaml
+   ```
+
+**A valid DAML project should have:**
+- ✅ A `daml.yaml` file in the root
+- ✅ Required fields: `name`, `version`, `sdk-version`
+- ✅ A `daml/` directory with DAML source files
+- ✅ Optional: `dependencies`, `build-options`, `source` path
+
+**Quick validation:**
+```bash
+cd {project_path_str}
+daml build
+```
+- If this succeeds, the project is valid
+- If it fails, check the error messages
+
+**Example valid daml.yaml:**
+```yaml
+sdk-version: 3.1.0
+name: my-project
+version: 1.0.0
+source: daml
+dependencies:
+  - daml-prim
+  - daml-stdlib
+```
+"""
         
-        # Check if directory exists
-        if not project_path.exists():
-            return DamlAutomaterResult(
-                success=True,
-                action="check_project",
-                message=f"Directory does not exist: {project_path}",
-                details={
-                    "exists": False,
-                    "is_directory": False,
-                    "has_daml_yaml": False,
-                    "valid": False,
-                    "project_path": str(project_path)
-                }
-            )
-        
-        if not project_path.is_dir():
-            return DamlAutomaterResult(
-                success=True,
-                action="check_project",
-                message=f"Path exists but is not a directory: {project_path}",
-                details={
-                    "exists": True,
-                    "is_directory": False,
-                    "has_daml_yaml": False,
-                    "valid": False,
-                    "project_path": str(project_path)
-                }
-            )
-        
-        # Check for daml.yaml
-        daml_yaml = project_path / "daml.yaml"
-        has_daml_yaml = daml_yaml.exists()
-        
-        if not has_daml_yaml:
-            return DamlAutomaterResult(
-                success=True,
-                action="check_project",
-                message=f"Directory exists but no daml.yaml found: {project_path}",
-                details={
-                    "exists": True,
-                    "is_directory": True,
-                    "has_daml_yaml": False,
-                    "valid": False,
-                    "project_path": str(project_path)
-                }
-            )
-        
-        # Try to parse daml.yaml
-        try:
-            project = self._daml_builder.parse_daml_yaml(project_path)
-            
-            return DamlAutomaterResult(
-                success=True,
-                action="check_project",
-                message=f"✅ Valid DAML project: {project.name}",
-                details={
-                    "exists": True,
-                    "is_directory": True,
-                    "has_daml_yaml": True,
-                    "valid": True,
-                    "project_path": str(project_path),
-                    "project_info": {
-                        "name": project.name,
-                        "version": project.version,
-                        "sdk_version": project.sdk_version
-                    }
-                }
-            )
-        except Exception as e:
-            return DamlAutomaterResult(
-                success=True,
-                action="check_project",
-                message=f"⚠️ daml.yaml exists but is invalid: {str(e)}",
-                details={
-                    "exists": True,
-                    "is_directory": True,
-                    "has_daml_yaml": True,
-                    "valid": False,
-                    "project_path": str(project_path),
-                    "parse_error": str(e)
-                }
-            )
+        return DamlAutomaterResult(
+            success=True,
+            action="check_project",
+            message="📋 Instructions to check DAML project validity",
+            commands=commands,
+            instructions=instructions,
+            details={
+                "project_path": project_path_str,
+                "required_files": ["daml.yaml", "daml/"],
+                "validation_command": "daml build"
+            }
+        )
     
-    async def _init_project(self, config: dict) -> DamlAutomaterResult:
+    def _init_project_instructions(self, config: dict) -> DamlAutomaterResult:
         """
-        Initialize boilerplate DAML project structure.
+        Provide instructions to initialize boilerplate DAML project structure.
         
         Config options:
-        - project_path: Absolute path to create project in (REQUIRED)
+        - project_path: Path to create project in (REQUIRED)
         - project_name: Name of the project (default: 'daml-project')
         - sdk_version: DAML SDK version (default: '3.1.0')
-        
-        SAFETY: Will NOT overwrite existing daml.yaml
         """
         project_path_str = config.get('project_path')
         if not project_path_str:
@@ -499,111 +587,100 @@ class DamlAutomaterTool(Tool[DamlAutomaterParams, DamlAutomaterResult]):
                 success=False,
                 action="init_project",
                 message="❌ Missing required config: project_path",
+                instructions="Please provide the path where you want to create the DAML project.",
                 details={
                     "error": "project_path is required",
                     "example": {"project_path": "/Users/you/my-daml-project"}
                 }
             )
         
-        project_path = Path(project_path_str)
         project_name = config.get('project_name', 'daml-project')
-        sdk_version = config.get('sdk_version', '3.4.0-snapshot.20251013.0')
+        sdk_version = config.get('sdk_version', '3.1.0')
         
-        logger.info(f"🏗️ Initializing DAML project: {project_path}")
+        commands = [
+            f"mkdir -p {project_path_str}",
+            f"cd {project_path_str}",
+            "# Create daml.yaml",
+            f"cat > daml.yaml << 'EOF'\nsdk-version: {sdk_version}\nname: {project_name}\nversion: 0.0.1\nsource: daml\ndependencies:\n  - daml-prim\n  - daml-stdlib\nEOF",
+            "# Create source directory",
+            "mkdir -p daml",
+            "# Create placeholder module",
+            "cat > daml/Main.daml << 'EOF'\nmodule Main where\n\ntemplate Placeholder\n  with\n    party: Party\n  where\n    signatory party\nEOF"
+        ]
         
-        # Create directory if it doesn't exist
-        try:
-            project_path.mkdir(parents=True, exist_ok=True)
-        except Exception as e:
-            return DamlAutomaterResult(
-                success=False,
-                action="init_project",
-                message=f"❌ Failed to create directory: {str(e)}",
-                details={"error": str(e), "project_path": str(project_path)}
-            )
-        
-        # SAFETY CHECK: Fail if daml.yaml already exists
-        daml_yaml = project_path / "daml.yaml"
-        if daml_yaml.exists():
-            return DamlAutomaterResult(
-                success=False,
-                action="init_project",
-                message=f"❌ daml.yaml already exists at {project_path}. Will not overwrite.",
-                details={
-                    "error": "daml.yaml already exists",
-                    "project_path": str(project_path),
-                    "safety": "init_project will not overwrite existing files"
-                }
-            )
-        
-        # Create daml.yaml
-        daml_yaml_content = f"""sdk-version: {sdk_version}
+        instructions = f"""To initialize a new DAML project:
+
+**Option 1: Use DAML CLI (Recommended)**
+```bash
+cd {project_path_str.rsplit('/', 1)[0] if '/' in project_path_str else '.'}
+daml new {project_name} --template skeleton
+```
+This creates a complete project structure with examples.
+
+**Option 2: Manual setup**
+```bash
+# Create project directory
+mkdir -p {project_path_str}
+cd {project_path_str}
+
+# Create daml.yaml
+cat > daml.yaml << 'EOF'
+sdk-version: {sdk_version}
 name: {project_name}
 version: 0.0.1
 source: daml
 dependencies:
   - daml-prim
   - daml-stdlib
-"""
-        
-        try:
-            daml_yaml.write_text(daml_yaml_content)
-            logger.info("✅ Created daml.yaml")
-        except Exception as e:
-            return DamlAutomaterResult(
-                success=False,
-                action="init_project",
-                message=f"❌ Failed to create daml.yaml: {str(e)}",
-                details={"error": str(e)}
-            )
-        
-        # Create daml/ directory
-        daml_dir = project_path / "daml"
-        try:
-            daml_dir.mkdir(exist_ok=True)
-            logger.info("✅ Created daml/ directory")
-        except Exception as e:
-            return DamlAutomaterResult(
-                success=False,
-                action="init_project",
-                message=f"❌ Failed to create daml/ directory: {str(e)}",
-                details={"error": str(e)}
-            )
-        
-        # Create placeholder Main.daml
-        main_daml = daml_dir / "Main.daml"
-        if not main_daml.exists():  # Only create if doesn't exist
-            main_daml_content = f"""-- Main module for {project_name}
-module Main where
+EOF
 
--- TODO: Add your DAML code here
--- This is a placeholder file to get you started
+# Create source directory
+mkdir daml
+
+# Create Main.daml
+cat > daml/Main.daml << 'EOF'
+module Main where
 
 template Placeholder
   with
     party: Party
   where
     signatory party
+EOF
+```
+
+**Verify the setup:**
+```bash
+cd {project_path_str}
+daml build
+```
+Should compile successfully.
+
+**Project structure:**
+```
+{project_name}/
+├── daml.yaml          # Project configuration
+└── daml/              # Source files
+    └── Main.daml      # Your DAML code
+```
+
+**Next steps:**
+1. Edit `daml/Main.daml` with your business logic
+2. Run `daml build` to compile
+3. Run `daml test` to validate (after adding test scenarios)
 """
-            try:
-                main_daml.write_text(main_daml_content)
-                logger.info("✅ Created Main.daml placeholder")
-            except Exception as e:
-                logger.warning(f"Failed to create Main.daml: {e}")
         
         return DamlAutomaterResult(
             success=True,
             action="init_project",
-            message=f"✅ Initialized DAML project: {project_name}",
+            message="📋 Instructions to initialize DAML project",
+            commands=commands,
+            instructions=instructions,
             details={
-                "project_path": str(project_path),
+                "project_path": project_path_str,
                 "project_name": project_name,
                 "sdk_version": sdk_version,
-                "files_created": [
-                    str(daml_yaml.relative_to(project_path)),
-                    str(daml_dir.relative_to(project_path)),
-                    str(main_daml.relative_to(project_path)) if main_daml.exists() else None
-                ]
+                "recommended_method": "daml new"
             }
         )
 

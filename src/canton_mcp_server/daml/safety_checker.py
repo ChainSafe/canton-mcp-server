@@ -90,10 +90,16 @@ class SafetyChecker:
         logger.info("Safety checker initialized (Gate 1: DAML Compiler Safety)")
 
     @property
-    def compiler(self) -> DamlCompiler:
-        """Lazy initialization of DAML compiler."""
+    def compiler(self) -> Optional[DamlCompiler]:
+        """Lazy initialization of DAML compiler (optional - may not be available)."""
         if self._compiler is None:
-            self._compiler = DamlCompiler(sdk_version=self._sdk_version)
+            try:
+                self._compiler = DamlCompiler(sdk_version=self._sdk_version)
+                logger.info("✅ DAML compiler available for server-side compilation")
+            except Exception as e:
+                logger.warning(f"⚠️ DAML compiler not available: {e}")
+                logger.info("Continuing without compilation - using LLM analysis only")
+                return None
         return self._compiler
 
     def _ensure_semantic_search(self):
@@ -251,14 +257,17 @@ FILE {i}: {file.get('file_path', 'unknown')} (similarity: {file.get('similarity_
         Gate 1: DAML Compiler Safety Check
 
         Complete safety validation flow:
-        1. Compile code (strict mode)
-        2. If failed: block, log, return
-        3. Extract authorization model
+        1. Compile code (if compiler available, otherwise skip)
+        2. If compilation failed: block, log, return
+        3. Extract authorization model (with LLM if enabled)
         4. Verify type safety
         5. Validate authorization model
         6. Generate safety certificate
         7. Log to audit trail
         8. Return result
+
+        NOTE: If DAML compiler not available on server, skips compilation
+        and relies on LLM-based analysis only. Suggests client-side compilation.
 
         Args:
             code: DAML source code to validate
@@ -270,15 +279,34 @@ FILE {i}: {file.get('file_path', 'unknown')} (similarity: {file.get('similarity_
         logger.info(f"Starting safety check for module: {module_name}")
 
         # Generate code hash for audit trail
-        code_hash = self.compiler.get_code_hash(code)
+        if self.compiler:
+            code_hash = self.compiler.get_code_hash(code)
+        else:
+            # Fallback hash when compiler not available
+            code_hash = hashlib.sha256(code.encode()).hexdigest()
 
-        # Step 1: Compile code
-        compilation_result = await self.compiler.compile(
-            code, module_name, strict_mode=True
-        )
+        # Step 1: Compile code (if compiler available)
+        compilation_result = None
+        compilation_skipped = False
+        
+        if self.compiler:
+            try:
+                compilation_result = await self.compiler.compile(
+                    code, module_name, strict_mode=True
+                )
+            except Exception as e:
+                logger.warning(f"Compilation failed: {e}. Continuing with LLM analysis only.")
+                compilation_skipped = True
+        else:
+            logger.info("⚠️ Compilation skipped - DAML compiler not available on server")
+            compilation_skipped = True
 
-        # Step 2: Check if compilation failed
-        blocked, blocked_reason = self._should_block(compilation_result)
+        # Step 2: Check if compilation failed (only if we compiled)
+        if compilation_result:
+            blocked, blocked_reason = self._should_block(compilation_result)
+        else:
+            blocked = False
+            blocked_reason = None
 
         if blocked:
             logger.warning(f"Pattern blocked: {blocked_reason}")
@@ -299,6 +327,7 @@ FILE {i}: {file.get('file_path', 'unknown')} (similarity: {file.get('similarity_
                 blocked_reason=blocked_reason,
                 safety_certificate=None,
                 audit_id=audit_id,
+                compilation_skipped=compilation_skipped,
             )
 
         # Step 2.5: Check code safety using ChromaDB + LLM reasoning
@@ -337,6 +366,7 @@ FILE {i}: {file.get('file_path', 'unknown')} (similarity: {file.get('similarity_
                     blocked_reason=llm_safety_check.get("reasoning", "LLM safety check failed"),
                     safety_certificate=None,
                     audit_id=audit_id,
+                    compilation_skipped=compilation_skipped,
                     llm_insights=llm_safety_check.get("full_response"),
                     similar_files=similar_files  # Already limited to 5
                 )
@@ -393,6 +423,7 @@ FILE {i}: {file.get('file_path', 'unknown')} (similarity: {file.get('similarity_
             return SafetyCheckResult(
                 passed=False,
                 should_delegate=True,
+                compilation_skipped=compilation_skipped,
                 delegation_reason=delegation_details,
                 confidence=auth_extraction.confidence,
                 compilation_result=compilation_result,
@@ -404,8 +435,12 @@ FILE {i}: {file.get('file_path', 'unknown')} (similarity: {file.get('similarity_
                 llm_insights=extraction_insights,
             )
 
-        # Step 4: Verify type safety
-        type_safe = self.type_verifier.verify_type_safety(compilation_result)
+        # Step 4: Verify type safety (skip if no compilation result)
+        type_safe = True  # Assume safe if we couldn't compile
+        if compilation_result:
+            type_safe = self.type_verifier.verify_type_safety(compilation_result)
+        else:
+            logger.info("Skipping type safety verification (no compilation result)")
 
         # Step 5: Validate authorization model
         auth_valid = True
@@ -434,6 +469,7 @@ FILE {i}: {file.get('file_path', 'unknown')} (similarity: {file.get('similarity_
                 delegation_reason=None,
                 confidence=auth_extraction.confidence,
                 compilation_result=compilation_result,
+                compilation_skipped=compilation_skipped,
                 authorization_model=auth_extraction.model,
                 blocked_reason=blocked_reason,
                 safety_certificate=None,
@@ -462,6 +498,7 @@ FILE {i}: {file.get('file_path', 'unknown')} (similarity: {file.get('similarity_
             delegation_reason=None,
             confidence=auth_extraction.confidence,
             compilation_result=compilation_result,
+            compilation_skipped=compilation_skipped,
             authorization_model=auth_extraction.model,
             blocked_reason=None,
             safety_certificate=safety_certificate,

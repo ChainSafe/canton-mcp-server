@@ -71,6 +71,10 @@ class DamlReasonResult(MCPModel):
     # Delegation (when action='delegate')
     delegation_reason: Optional[str] = Field(default=None, description="Why delegation is needed")
     
+    # Compilation status (when compilation not available on server)
+    compilation_skipped: bool = Field(default=False, description="Whether compilation was skipped")
+    compilation_instructions: Optional[str] = Field(default=None, description="Instructions to compile code client-side")
+    
     # Common fields
     business_intent: str = Field(description="The business intent analyzed")
     reasoning: str = Field(description="Explanation of the action taken")
@@ -217,17 +221,37 @@ class DamlReasonTool(Tool[DamlReasonParams, DamlReasonResult]):
         if safety_result.passed and not safety_result.should_delegate:
             logger.info(f"✅ Code validation passed (confidence: {safety_result.confidence:.2f})")
             
+            # Prepare compilation instructions if compilation was skipped
+            compilation_instructions = None
+            if safety_result.compilation_skipped:
+                compilation_instructions = """⚠️ Server-side compilation not available. For additional validation:
+
+1. **Compile locally:**
+   ```bash
+   daml build
+   ```
+
+2. **If compilation fails**, send the error messages back for analysis.
+
+3. **If compilation succeeds**, your code passes type checking and you can proceed with deployment.
+
+**Note:** The analysis above is based on LLM reasoning and pattern matching without compilation."""
+            
             yield ctx.structured(DamlReasonResult(
                 action="approved",
                 valid=True,
                 confidence=safety_result.confidence,
                 issues=[],
-                suggestions=[],
+                suggestions=["Consider compiling locally for additional type-safety verification"] if safety_result.compilation_skipped else [],
                 llm_insights=safety_result.llm_insights,
                 business_intent=business_intent,
                 recommended_patterns=[],
+                compilation_skipped=safety_result.compilation_skipped,
+                compilation_instructions=compilation_instructions,
                 reasoning=f"Code validated successfully with {safety_result.confidence:.0%} confidence. "
-                         f"Authorization model extracted and verified. Ready to use."
+                         f"Authorization model extracted and verified. "
+                         f"{'(LLM-based analysis without compilation) ' if safety_result.compilation_skipped else ''}"
+                         f"Ready to use."
             ))
             return
         
@@ -235,16 +259,30 @@ class DamlReasonTool(Tool[DamlReasonParams, DamlReasonResult]):
         if safety_result.should_delegate:
             logger.warning(f"⚠️  Delegation required: {safety_result.delegation_reason}")
             
+            compilation_instructions = None
+            if safety_result.compilation_skipped:
+                compilation_instructions = """For better analysis, compile your code locally:
+
+```bash
+cd /path/to/your/project
+daml build
+```
+
+Send back any compilation errors for detailed analysis."""
+            
             yield ctx.structured(DamlReasonResult(
                 action="delegate",
                 valid=False,
                 confidence=safety_result.confidence,
                 issues=[f"Analysis uncertain: {safety_result.delegation_reason}"],
-                suggestions=["Simplify the authorization model", "Use canonical patterns", "Request manual review"],
+                suggestions=["Compile locally and send back errors", "Simplify the authorization model", "Use canonical patterns", "Request manual review"],
                 llm_insights=safety_result.llm_insights,
                 business_intent=business_intent,
                 delegation_reason=safety_result.delegation_reason,
+                compilation_skipped=safety_result.compilation_skipped,
+                compilation_instructions=compilation_instructions,
                 reasoning="Code complexity exceeds reliable analysis threshold. "
+                         f"{'Server-side compilation not available. ' if safety_result.compilation_skipped else ''}"
                          "Consider simplifying or using canonical patterns."
             ))
             return
@@ -300,16 +338,32 @@ class DamlReasonTool(Tool[DamlReasonParams, DamlReasonResult]):
                         "description": file.get("description", "")[:200]
                     })
         
+        # Prepare compilation instructions if compilation was skipped
+        compilation_instructions = None
+        if safety_result.compilation_skipped:
+            compilation_instructions = """To get detailed compilation errors, compile locally:
+
+```bash
+cd /path/to/your/project
+daml build
+```
+
+This will provide specific line-by-line errors that can help identify the issues."""
+            
         yield ctx.structured(DamlReasonResult(
             action="suggest_edits",
             valid=False,
             confidence=safety_result.confidence,
             issues=issues,
-            suggestions=["Review the similar patterns below", "Fix authorization model issues", "Ensure all signatories are defined"],
+            suggestions=["Review the similar patterns below", "Compile locally for detailed errors", "Fix authorization model issues", "Ensure all signatories are defined"],
             llm_insights=safety_result.llm_insights,
             business_intent=business_intent,
             recommended_patterns=formatted_patterns,
-            reasoning=f"Code validation failed. Found {len(formatted_patterns)} similar patterns that might help fix the issues."
+            compilation_skipped=safety_result.compilation_skipped,
+            compilation_instructions=compilation_instructions,
+            reasoning=f"Code validation failed. "
+                     f"{'(LLM-based analysis without compilation) ' if safety_result.compilation_skipped else ''}"
+                     f"Found {len(formatted_patterns)} similar patterns that might help fix the issues."
         ))
 
     def _extract_module_name(self, daml_code: str) -> Optional[str]:

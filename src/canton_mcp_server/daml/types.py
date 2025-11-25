@@ -135,11 +135,14 @@ class SafetyCheckResult:
     """Gate 1 safety check result with delegation support"""
 
     passed: bool
-    compilation_result: CompilationResult
+    compilation_result: Optional[CompilationResult] = None  # Optional now - may skip compilation
     authorization_model: Optional[AuthorizationModel] = None
     blocked_reason: Optional[str] = None
     safety_certificate: Optional[str] = None
     audit_id: str = ""
+    
+    # Compilation status (for multi-tenant servers without DAML SDK)
+    compilation_skipped: bool = False  # True if compilation not available on server
     
     # Delegation support for paid tools
     should_delegate: bool = False  # True if analysis confidence too low
@@ -163,6 +166,8 @@ class SafetyCheckResult:
         
         status = "✅ SAFE" if self.passed else "❌ BLOCKED"
         lines = [f"Safety Check: {status}"]
+        if self.compilation_skipped:
+            lines.append("⚠️ Compilation skipped (not available on server)")
         if self.blocked_reason:
             lines.append(f"Reason: {self.blocked_reason}")
         if self.authorization_model:
