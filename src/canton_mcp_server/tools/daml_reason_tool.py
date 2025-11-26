@@ -294,9 +294,11 @@ Send back any compilation errors for detailed analysis."""
         if safety_result.blocked_reason:
             issues.append(safety_result.blocked_reason)
         
-        if safety_result.compilation_result and not safety_result.compilation_result.succeeded:
-            for error in safety_result.compilation_result.errors:
-                issues.append(str(error))
+        # Add compilation errors if available (defensive check)
+        if safety_result.compilation_result:
+            if hasattr(safety_result.compilation_result, 'succeeded') and not safety_result.compilation_result.succeeded:
+                for error in safety_result.compilation_result.errors:
+                    issues.append(str(error))
         
         # Get pattern recommendations
         # OPTIMIZATION: Reuse similar_files from safety_result if available
