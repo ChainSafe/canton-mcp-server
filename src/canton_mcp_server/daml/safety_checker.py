@@ -6,15 +6,13 @@ Orchestrates safety validation through compilation.
 """
 
 import hashlib
-import json
 import logging
-from datetime import datetime
 from typing import Optional, TYPE_CHECKING
 
 from .audit_trail import AuditTrail
 from .authorization_validator import AuthorizationValidator
 from .type_safety_verifier import TypeSafetyVerifier
-from .types import CompilationResult, CompilationStatus, SafetyCheckResult
+from .types import CompilationResult, SafetyCheckResult
 
 if TYPE_CHECKING:
     from ..core.semantic_search import DAMLSemanticSearch
