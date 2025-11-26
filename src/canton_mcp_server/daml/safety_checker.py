@@ -413,7 +413,6 @@ FILE {i}: {file.get('file_path', 'unknown')} (similarity: {file.get('similarity_
                 result=compilation_result,
                 auth_model=auth_extraction.model,
                 blocked=False,  # Not blocked, just uncertain
-                policy_check=None,
             )
             
             delegation_details = f"Authorization extraction confidence too low ({auth_extraction.confidence:.2f})"
@@ -431,7 +430,6 @@ FILE {i}: {file.get('file_path', 'unknown')} (similarity: {file.get('similarity_
                 blocked_reason=None,
                 safety_certificate=None,
                 audit_id=audit_id,
-                policy_check=None,
                 llm_insights=extraction_insights,
             )
 
