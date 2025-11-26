@@ -57,7 +57,7 @@ class AuthorizationValidator:
             AuthorizationExtractionResult with model and confidence score
         """
         # Only extract from successfully compiled code
-        if not compilation_result.succeeded:
+        if not compilation_result or not compilation_result.succeeded:
             logger.debug("Skipping auth extraction - compilation failed")
             return AuthorizationExtractionResult(
                 model=None,

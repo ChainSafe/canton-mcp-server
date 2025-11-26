@@ -29,7 +29,7 @@ class TypeSafetyVerifier:
         Returns:
             True if no type errors found, False otherwise
         """
-        if compilation_result.succeeded:
+        if compilation_result and compilation_result.succeeded:
             # Successful compilation means type-safe
             return True
 
