@@ -162,17 +162,21 @@ class DAMLSemanticSearch:
             if not searchable_text.strip():
                 searchable_text = resource.get("description", "No description available")
             
-            # Create unique ID based on file path (more unique than name alone)
+            # Create unique ID based on repo + file path
             name = resource.get("name", "")
             file_path_val = resource.get("file_path", "")
+            source_repo = resource.get("source_repo", "unknown")
             
-            # Use full file path for ID to ensure uniqueness
-            resource_id = file_path_val.replace("/", "-").replace(".", "-") if file_path_val else name.replace(" ", "-")
+            # Include repo name to ensure uniqueness across repos
+            if file_path_val:
+                resource_id = f"{source_repo}-{file_path_val}".replace("/", "-").replace(".", "-")
+            else:
+                resource_id = name.replace(" ", "-")
             
             # Add hash suffix if ID is too short (ensure uniqueness)
             if len(resource_id) < 10:
                 import hashlib
-                hash_suffix = hashlib.md5(file_path_val.encode()).hexdigest()[:8]
+                hash_suffix = hashlib.md5(f"{source_repo}{file_path_val}".encode()).hexdigest()[:8]
                 resource_id = f"{resource_id}-{hash_suffix}"
             
             # Store minimal metadata for retrieval (no synthetic summaries)
