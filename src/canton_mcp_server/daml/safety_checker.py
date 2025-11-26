@@ -15,7 +15,7 @@ from .audit_trail import AuditTrail
 from .authorization_validator import AuthorizationValidator
 from .daml_compiler_integration import DamlCompiler
 from .type_safety_verifier import TypeSafetyVerifier
-from .types import CompilationStatus, SafetyCheckResult
+from .types import CompilationResult, CompilationStatus, SafetyCheckResult
 
 if TYPE_CHECKING:
     from ..core.semantic_search import DAMLSemanticSearch
