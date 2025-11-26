@@ -49,13 +49,17 @@ class DamlReasonParams(MCPModel):
         default=None,
         description="Specific security requirements to check"
     )
+    compilation_result: Optional[dict] = Field(
+        default=None,
+        description="Client-side compilation result (optional). Provide this after compiling locally to enable full LLM analysis."
+    )
 
 
 class DamlReasonResult(MCPModel):
     """Result from DAML Reason analysis"""
 
     action: str = Field(
-        description="Action type: 'approved', 'suggest_patterns', 'suggest_edits', 'delegate'"
+        description="Action type: 'approved', 'suggest_patterns', 'suggest_edits', 'delegate', 'compile_needed'"
     )
     
     # Validation results (when action='approved' or 'suggest_edits')
@@ -207,14 +211,70 @@ class DamlReasonTool(Tool[DamlReasonParams, DamlReasonResult]):
             ))
             return
 
-        # CASE 2: Code provided - validate it
+        # CASE 2: Code provided - check if we have compilation results
         logger.info(f"Validating DAML code for: {business_intent}")
         
-        # Run Gate 1 safety check
+        # CASE 2a: No compilation result - return similarity search and request compilation
+        if ctx.params.compilation_result is None:
+            logger.info("No compilation result provided - returning similarity search + compilation request")
+            
+            # Initialize semantic search
+            self._ensure_semantic_search()
+            
+            # Run similarity search
+            similar_files = []
+            if self._semantic_search and self._raw_resources:
+                similar_files = self._semantic_search.search_similar_files(
+                    code=daml_code,
+                    top_k=5,
+                    raw_resources=[r for resources in self._raw_resources.values() for r in resources]
+                )
+            
+            # Format recommendations
+            formatted_patterns = []
+            for file in similar_files[:5]:
+                formatted_patterns.append({
+                    "name": file.get("name", "Unknown"),
+                    "path": file.get("file_path", "Unknown"),
+                    "score": file.get("similarity_score", 0.0),
+                    "description": file.get("description", "")[:200]
+                })
+            
+            yield ctx.structured(DamlReasonResult(
+                action="compile_needed",
+                valid=False,
+                confidence=0.0,
+                issues=[],
+                suggestions=["Compile code locally to enable full analysis"],
+                business_intent=business_intent,
+                recommended_patterns=formatted_patterns,
+                compilation_skipped=True,
+                compilation_instructions="""To enable full LLM analysis with authorization checking:
+
+1. **Compile locally:**
+   ```bash
+   cd /path/to/your/project
+   daml build
+   ```
+
+2. **Send back the compilation result** by calling this tool again with the `compilation_result` parameter.
+
+3. **If compilation fails**, send the error output - the LLM can analyze errors too.
+
+**Meanwhile**, here are similar patterns from canonical repositories that might help.""",
+                reasoning=f"Similarity search complete ({len(formatted_patterns)} patterns found). Compilation needed for full analysis with authorization checking."
+            ))
+            return
+        
+        # CASE 2b: Compilation result provided - run full analysis
+        logger.info("Compilation result provided - running full analysis with LLM")
+        
+        # Run Gate 1 safety check with compilation context
         module_name = self._extract_module_name(daml_code) or "Main"
         safety_result = await self.safety_checker.check_pattern_safety(
             daml_code, 
-            module_name=module_name
+            module_name=module_name,
+            compilation_context=ctx.params.compilation_result
         )
         
         # CASE 2a: Validation passed with high confidence

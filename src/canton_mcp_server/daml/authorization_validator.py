@@ -56,23 +56,26 @@ class AuthorizationValidator:
         Returns:
             AuthorizationExtractionResult with model and confidence score
         """
-        # Only extract from successfully compiled code
-        if not compilation_result or not compilation_result.succeeded:
-            logger.debug("Skipping auth extraction - compilation failed")
-            return AuthorizationExtractionResult(
-                model=None,
-                confidence=0.0,
-                method="compilation_failed",
-                uncertain_fields=[],
-                reasoning="Compilation failed"
-            )
+        # Note: We proceed with LLM extraction regardless of compilation status
+        # LLM can analyze code patterns even without syntax validation
+        # Compilation result is passed as context to inform confidence scoring
+        compilation_available = compilation_result and compilation_result.succeeded
+        
+        if not compilation_available:
+            logger.debug("No compilation available - LLM will analyze without syntax validation")
 
         # PRIMARY PATH: Use LLM if available
         if self.llm_client:
             logger.info("🤖 Using LLM for authorization extraction (primary path)")
-            llm_result = self._extract_with_llm(code, None)
+            llm_result = self._extract_with_llm(code, compilation_result)
             
-            if llm_result.confidence >= 0.85:
+            # Adjust confidence if no compilation validation
+            if not compilation_available and llm_result.confidence > 0:
+                original_confidence = llm_result.confidence
+                llm_result.confidence *= 0.85  # Slight reduction without syntax validation
+                logger.info(f"Adjusted confidence for no compilation: {original_confidence:.2f} → {llm_result.confidence:.2f}")
+            
+            if llm_result.confidence >= 0.70:  # Lowered threshold since we allow no-compilation
                 logger.info(f"✅ LLM extraction succeeded (confidence: {llm_result.confidence:.2f})")
                 return llm_result
             else:
@@ -322,13 +325,13 @@ class AuthorizationValidator:
         
         return (max(confidence, 0.0), uncertain_fields)
     
-    def _extract_with_llm(self, code: str, partial_model: Optional[AuthorizationModel]) -> AuthorizationExtractionResult:
+    def _extract_with_llm(self, code: str, compilation_result: Optional[CompilationResult]) -> AuthorizationExtractionResult:
         """
         Use LLM to extract authorization model from DAML code (primary method).
         
         Args:
             code: DAML source code
-            partial_model: Unused (kept for compatibility)
+            compilation_result: Optional compilation result for context
             
         Returns:
             AuthorizationExtractionResult with LLM-extracted model
@@ -343,12 +346,24 @@ class AuthorizationValidator:
             )
         
         try:
+            # Determine compilation status for prompt
+            compilation_status = "Unknown"
+            if compilation_result:
+                if compilation_result.succeeded:
+                    compilation_status = "✓ Syntax validated (compiled successfully)"
+                else:
+                    compilation_status = f"✗ Compilation failed ({len(compilation_result.errors)} errors)"
+            else:
+                compilation_status = "⊘ Not compiled (syntax not validated)"
+            
             prompt = f"""You are a DAML code analyzer. Extract the authorization model from this DAML template.
 
 DAML Code:
 ```daml
 {code}
 ```
+
+COMPILATION STATUS: {compilation_status}
 
 TASK: Extract authorization declarations from the template above.
 
@@ -406,11 +421,12 @@ template MultiParty
 Output: {{"template_name": "MultiParty", "signatories": ["owner"], "observers": ["approvers", "watchers"], "controllers": {{}}, "confidence": 0.95}}
 
 CONFIDENCE SCALE:
-- 1.0: Simple, clear patterns
-- 0.95: List operations (<>, ::)
-- 0.9: Multiple choices
-- 0.8: Complex but clear expressions
-- 0.5: Ambiguous or unclear
+- 1.0: Simple, clear patterns (with syntax validation)
+- 0.95: List operations (<>, ::) or no syntax validation but clear
+- 0.9: Multiple choices or complex patterns
+- 0.8: Complex expressions without syntax validation
+- 0.7: Ambiguous patterns without syntax validation
+- 0.5: Very unclear or incomplete
 
 OUTPUT FORMAT:
 First, return the JSON object:

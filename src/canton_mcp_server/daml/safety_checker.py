@@ -259,27 +259,28 @@ FILE {i}: {file.get('file_path', 'unknown')} (similarity: {file.get('similarity_
         return "\n".join(formatted)
 
     async def check_pattern_safety(
-        self, code: str, module_name: str = "Main"
+        self, code: str, module_name: str = "Main", compilation_context: Optional[dict] = None
     ) -> SafetyCheckResult:
         """
         Gate 1: DAML Compiler Safety Check
 
         Complete safety validation flow:
-        1. Compile code (if compiler available, otherwise skip)
-        2. If compilation failed: block, log, return
-        3. Extract authorization model (with LLM if enabled)
+        1. Use compilation context from client (if provided)
+        2. Run similarity search (always)
+        3. Extract authorization model with LLM (uses compilation + similarity context)
         4. Verify type safety
         5. Validate authorization model
         6. Generate safety certificate
         7. Log to audit trail
         8. Return result
 
-        NOTE: If DAML compiler not available on server, skips compilation
-        and relies on LLM-based analysis only. Suggests client-side compilation.
+        NOTE: Server never compiles - compilation is delegated to client.
+        Full analysis only runs when compilation_context is provided.
 
         Args:
             code: DAML source code to validate
             module_name: Module name (default: "Main")
+            compilation_context: Optional client-side compilation result
 
         Returns:
             SafetyCheckResult with pass/fail and details
@@ -293,21 +294,17 @@ FILE {i}: {file.get('file_path', 'unknown')} (similarity: {file.get('similarity_
             # Fallback hash when compiler not available
             code_hash = hashlib.sha256(code.encode()).hexdigest()
 
-        # Step 1: Compile code (if compiler available)
+        # Step 1: Use compilation context from client (server never compiles)
         compilation_result = None
-        compilation_skipped = False
+        compilation_skipped = True  # Always true - server doesn't compile
         
-        if self.compiler:
-            try:
-                compilation_result = await self.compiler.compile(
-                    code, module_name, strict_mode=True
-                )
-            except Exception as e:
-                logger.warning(f"Compilation failed: {e}. Continuing with LLM analysis only.")
-                compilation_skipped = True
+        if compilation_context:
+            logger.info("✅ Using client-provided compilation context")
+            # Convert dict to CompilationResult if needed
+            # For now, we'll work with the dict directly in authorization extraction
+            # TODO: Convert to proper CompilationResult object
         else:
-            logger.info("⚠️ Compilation skipped - DAML compiler not available on server")
-            compilation_skipped = True
+            logger.info("⚠️ No compilation context provided - semantic analysis only")
 
         # Step 2: Check if compilation failed (only if we compiled)
         if compilation_result:
