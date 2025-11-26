@@ -412,16 +412,16 @@ curl -s http://localhost:{ledger_port}/livez
 """
         
         return DamlAutomaterResult(
-            success=True,
-            action="status",
-            message="📋 Instructions to check Canton status",
-            commands=commands,
-            instructions=instructions,
-            details={
-                "ledger_port": ledger_port,
-                "check_methods": ["ps", "lsof", "curl"]
-            }
-        )
+                success=True,
+                action="status",
+                message="📋 Instructions to check Canton status",
+                commands=commands,
+                instructions=instructions,
+                details={
+                    "ledger_port": ledger_port,
+                    "check_methods": ["ps", "lsof", "curl"]
+                }
+            )
     
     def _teardown_env_instructions(self, config: dict) -> DamlAutomaterResult:
         """
@@ -560,17 +560,17 @@ dependencies:
 """
         
         return DamlAutomaterResult(
-            success=True,
-            action="check_project",
-            message="📋 Instructions to check DAML project validity",
-            commands=commands,
-            instructions=instructions,
-            details={
-                "project_path": project_path_str,
-                "required_files": ["daml.yaml", "daml/"],
-                "validation_command": "daml build"
-            }
-        )
+                success=True,
+                action="check_project",
+                message="📋 Instructions to check DAML project validity",
+                commands=commands,
+                instructions=instructions,
+                details={
+                    "project_path": project_path_str,
+                    "required_files": ["daml.yaml", "daml/"],
+                    "validation_command": "daml build"
+                }
+            )
     
     def _init_project_instructions(self, config: dict) -> DamlAutomaterResult:
         """
@@ -622,8 +622,8 @@ This creates a complete project structure with examples.
 # Create project directory
 mkdir -p {project_path_str}
 cd {project_path_str}
-
-# Create daml.yaml
+        
+        # Create daml.yaml
 cat > daml.yaml << 'EOF'
 sdk-version: {sdk_version}
 name: {project_name}
