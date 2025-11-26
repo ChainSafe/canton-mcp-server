@@ -52,7 +52,7 @@ class AuditTrail:
         self,
         code_hash: str,
         module_name: str,
-        result: CompilationResult,
+        result: Optional[CompilationResult],
         auth_model: Optional[AuthorizationModel],
         blocked: bool,
         llm_safety_check: Optional[dict] = None,
@@ -63,7 +63,7 @@ class AuditTrail:
         Args:
             code_hash: SHA256 hash of code
             module_name: Module name
-            result: Compilation result
+            result: Compilation result (None if compilation was skipped)
             auth_model: Extracted authorization model (if successful)
             blocked: Whether pattern was blocked
             llm_safety_check: LLM safety check result (if LLM checking was performed)
@@ -84,13 +84,17 @@ class AuditTrail:
             anti_pattern_name = "LLM Safety Concern"
             policy_reasoning = llm_safety_check.get("reasoning", "")
 
+        # Handle case where compilation was skipped (result is None)
+        status = result.status if result else CompilationStatus.SKIPPED
+        errors = result.errors if result else []
+
         entry = AuditEntry(
             audit_id=audit_id,
             timestamp=timestamp,
             code_hash=code_hash,
             module_name=module_name,
-            status=result.status,
-            errors=result.errors,
+            status=status,
+            errors=errors,
             authorization_model=auth_model,
             blocked=blocked,
             policy_blocked=policy_blocked,
@@ -102,8 +106,8 @@ class AuditTrail:
         self._write_entry(entry)
 
         log_msg = (
-            f"Audit logged: {audit_id} (status: {result.status.value}, "
-            f"blocked: {blocked}, errors: {len(result.errors)}"
+            f"Audit logged: {audit_id} (status: {status.value}, "
+            f"blocked: {blocked}, errors: {len(errors)}"
         )
         if policy_blocked:
             log_msg += f", policy_blocked: {anti_pattern_name}"

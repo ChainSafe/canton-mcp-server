@@ -16,6 +16,7 @@ class CompilationStatus(Enum):
     SUCCESS = "success"
     FAILED = "failed"  # Code errors (auth, type, syntax)
     ERROR = "error"  # System errors (missing daml, timeout, etc.)
+    SKIPPED = "skipped"  # Compilation was not performed (LLM-only analysis)
 
 
 class ErrorCategory(Enum):
