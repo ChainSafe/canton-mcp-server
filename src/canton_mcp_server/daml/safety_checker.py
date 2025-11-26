@@ -136,7 +136,7 @@ class SafetyChecker:
         self,
         code: str,
         similar_files: list,
-        compilation_result: CompilationStatus
+        compilation_result: Optional[CompilationResult]
     ) -> dict:
         """
         Use LLM to reason about code safety by comparing to similar files.
@@ -165,6 +165,14 @@ class SafetyChecker:
             # Format similar files for LLM context
             context = self._format_similar_files_for_llm(similar_files)
             
+            # Determine compilation status message
+            if compilation_result is None:
+                compilation_status = "⊘ Not compiled (server-side compilation unavailable)"
+            elif compilation_result.succeeded:
+                compilation_status = "✓ Passed"
+            else:
+                compilation_status = "✗ Failed"
+            
             # Ask LLM to reason about code safety
             response = await asyncio.to_thread(
                 llm_client.messages.create,
@@ -179,7 +187,7 @@ USER'S CODE:
 {code}
 ```
 
-COMPILATION STATUS: {"✓ Passed" if compilation_result.succeeded else "✗ Failed"}
+COMPILATION STATUS: {compilation_status}
 
 SIMILAR EXAMPLES FROM CANONICAL REPOS:
 {context}
