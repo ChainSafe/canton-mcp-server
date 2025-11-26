@@ -22,7 +22,6 @@ from .types import (
     AuditEntry,
 )
 
-from .daml_compiler_integration import DamlCompiler
 from .safety_checker import SafetyChecker
 from .authorization_validator import AuthorizationValidator
 from .type_safety_verifier import TypeSafetyVerifier
@@ -38,7 +37,6 @@ __all__ = [
     "SafetyCheckResult",
     "AuditEntry",
     # Classes
-    "DamlCompiler",
     "SafetyChecker",
     "AuthorizationValidator",
     "TypeSafetyVerifier",

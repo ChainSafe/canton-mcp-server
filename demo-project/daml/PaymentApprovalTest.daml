@@ -1,0 +1,29 @@
+module PaymentApprovalTest where
+
+import Daml.Script
+import PaymentApproval
+
+test_payment_approval : Script ()
+test_payment_approval = script do
+  -- Allocate parties
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+  carol <- allocateParty "Carol"
+  
+  -- Alice creates a payment proposal
+  proposalCid <- submit alice do
+    createCmd PaymentProposal with
+      alice
+      bob
+      carol
+      amount = 100.0
+      currency = "USD"
+  
+  -- Bob tries to approve it
+  -- This is where we'll see if the authorization bug is real or not
+  (approvedCid, notifyCid) <- submit bob do
+    exerciseCmd proposalCid Approve
+  
+  -- If we get here, the code works!
+  return ()
+

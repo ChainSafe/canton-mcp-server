@@ -1,0 +1,27 @@
+-- Simple contract that definitely compiles
+module SimpleContract where
+
+template SimpleIou
+  with
+    payer: Party
+    owner: Party
+    amount: Decimal
+    currency: Text
+  where
+    signatory payer
+    observer owner
+    
+    ensure amount > 0.0
+    
+    choice Transfer : ContractId SimpleIou
+      with
+        newOwner: Party
+      controller owner
+      do
+        create this with owner = newOwner
+    
+    choice Settle : ()
+      controller payer
+      do
+        return ()
+

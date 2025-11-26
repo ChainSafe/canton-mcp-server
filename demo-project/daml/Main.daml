@@ -1,0 +1,11 @@
+-- Main module for basic-iou-demo
+module Main where
+
+-- TODO: Add your DAML code here
+-- This is a placeholder file to get you started
+
+template Placeholder
+  with
+    party: Party
+  where
+    signatory party

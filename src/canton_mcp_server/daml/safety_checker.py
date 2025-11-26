@@ -13,7 +13,6 @@ from typing import Optional, TYPE_CHECKING
 
 from .audit_trail import AuditTrail
 from .authorization_validator import AuthorizationValidator
-from .daml_compiler_integration import DamlCompiler
 from .type_safety_verifier import TypeSafetyVerifier
 from .types import CompilationResult, CompilationStatus, SafetyCheckResult
 
@@ -38,7 +37,6 @@ class SafetyChecker:
 
     def __init__(
         self,
-        compiler: Optional[DamlCompiler] = None,
         auth_validator: Optional[AuthorizationValidator] = None,
         type_verifier: Optional[TypeSafetyVerifier] = None,
         audit_trail: Optional[AuditTrail] = None,
@@ -46,19 +44,16 @@ class SafetyChecker:
     ):
         """
         Initialize safety checker with validators.
+        
+        NOTE: Server never performs compilation - all compilation is client-side.
 
         Args:
-            compiler: DAML compiler (creates default if None)
             auth_validator: Authorization validator (creates default if None)
             type_verifier: Type safety verifier (creates default if None)
             audit_trail: Audit trail (creates default if None)
             semantic_search: Semantic search engine for finding similar files (creates on first use if None)
         """
         from ..env import get_env, get_env_bool, get_env_float
-        
-        # Store compiler or config for lazy initialization
-        self._compiler = compiler
-        self._sdk_version = get_env("DAML_SDK_VERSION", "3.4.0-snapshot.20251013.0")
         
         # Initialize AuthorizationValidator with LLM support if enabled
         if auth_validator is None:
@@ -88,19 +83,6 @@ class SafetyChecker:
         self._raw_resources = None
 
         logger.info("Safety checker initialized (Gate 1: DAML Compiler Safety)")
-
-    @property
-    def compiler(self) -> Optional[DamlCompiler]:
-        """Lazy initialization of DAML compiler (optional - may not be available)."""
-        if self._compiler is None:
-            try:
-                self._compiler = DamlCompiler(sdk_version=self._sdk_version)
-                logger.info("✅ DAML compiler available for server-side compilation")
-            except Exception as e:
-                logger.warning(f"⚠️ DAML compiler not available: {e}")
-                logger.info("Continuing without compilation - using LLM analysis only")
-                return None
-        return self._compiler
 
     def _ensure_semantic_search(self):
         """Lazy initialization of semantic search with raw resources."""
@@ -288,11 +270,7 @@ FILE {i}: {file.get('file_path', 'unknown')} (similarity: {file.get('similarity_
         logger.info(f"Starting safety check for module: {module_name}")
 
         # Generate code hash for audit trail
-        if self.compiler:
-            code_hash = self.compiler.get_code_hash(code)
-        else:
-            # Fallback hash when compiler not available
-            code_hash = hashlib.sha256(code.encode()).hexdigest()
+        code_hash = hashlib.sha256(code.encode()).hexdigest()
 
         # Step 1: Use compilation context from client (server never compiles)
         compilation_result = None
@@ -300,40 +278,10 @@ FILE {i}: {file.get('file_path', 'unknown')} (similarity: {file.get('similarity_
         
         if compilation_context:
             logger.info("✅ Using client-provided compilation context")
-            # Convert dict to CompilationResult if needed
-            # For now, we'll work with the dict directly in authorization extraction
-            # TODO: Convert to proper CompilationResult object
+            # TODO: Convert dict to proper CompilationResult object for type safety
+            # For now, pass dict directly to authorization extraction
         else:
             logger.info("⚠️ No compilation context provided - semantic analysis only")
-
-        # Step 2: Check if compilation failed (only if we compiled)
-        if compilation_result:
-            blocked, blocked_reason = self._should_block(compilation_result)
-        else:
-            blocked = False
-            blocked_reason = None
-
-        if blocked:
-            logger.warning(f"Pattern blocked: {blocked_reason}")
-
-            # Log to audit trail
-            audit_id = self.audit_trail.log_compilation(
-                code_hash=code_hash,
-                module_name=module_name,
-                result=compilation_result,
-                auth_model=None,
-                blocked=True,
-            )
-
-            return SafetyCheckResult(
-                passed=False,
-                compilation_result=compilation_result,
-                authorization_model=None,
-                blocked_reason=blocked_reason,
-                safety_certificate=None,
-                audit_id=audit_id,
-                compilation_skipped=compilation_skipped,
-            )
 
         # Step 2.5: Check code safety using ChromaDB + LLM reasoning
         self._ensure_semantic_search()
@@ -479,10 +427,9 @@ FILE {i}: {file.get('file_path', 'unknown')} (similarity: {file.get('similarity_
                 audit_id=audit_id,
             )
 
-        # Step 7: Generate safety certificate
-        safety_certificate = self._generate_safety_certificate(
-            code_hash, auth_extraction.model, compilation_result
-        )
+        # Step 7: Certificate generation removed (no server-side compilation)
+        # Certificates should be generated client-side after compilation
+        safety_certificate = None
 
         # Step 8: Log to audit trail
         audit_id = self.audit_trail.log_compilation(
@@ -509,32 +456,6 @@ FILE {i}: {file.get('file_path', 'unknown')} (similarity: {file.get('similarity_
             llm_insights=extraction_insights,
         )
 
-    def _should_block(
-        self, compilation_result
-    ) -> tuple[bool, Optional[str]]:
-        """
-        Determine if pattern should be blocked based on compilation result.
-
-        Args:
-            compilation_result: DAML compilation result
-
-        Returns:
-            Tuple of (should_block, reason)
-        """
-        # Block if compilation failed
-        if not compilation_result.succeeded:
-            error_summary = self.type_verifier.get_error_summary(
-                compilation_result.errors
-            )
-            return True, f"Compilation failed:\n{error_summary}"
-
-        # Block if system error
-        if compilation_result.status == CompilationStatus.ERROR:
-            return True, "System error during compilation"
-
-        # Passed compilation
-        return False, None
-
     def _build_block_reason(self, type_safe: bool, auth_valid: bool) -> str:
         """
         Build human-readable block reason.
@@ -555,52 +476,6 @@ FILE {i}: {file.get('file_path', 'unknown')} (similarity: {file.get('similarity_
             reasons.append("Authorization model invalid or missing")
 
         return "; ".join(reasons)
-
-    def _generate_safety_certificate(
-        self, code_hash: str, auth_model, compilation_result
-    ) -> str:
-        """
-        Generate safety certificate for validated pattern.
-
-        Certificate contains:
-        - Code hash (SHA256)
-        - DAML SDK version
-        - Authorization model
-        - Compilation timestamp
-        - Certificate signature
-
-        Args:
-            code_hash: SHA256 hash of code
-            auth_model: Authorization model
-            compilation_result: Compilation result
-
-        Returns:
-            JSON safety certificate
-        """
-        certificate = {
-            "version": "1.0",
-            "gate": "daml_compiler_safety",
-            "timestamp": datetime.utcnow().isoformat(),
-            "code_hash": code_hash,
-            "daml_sdk_version": self.compiler.sdk_version,
-            "compilation_time_ms": compilation_result.compilation_time_ms,
-            "authorization_model": {
-                "template": auth_model.template_name,
-                "signatories": auth_model.signatories,
-                "observers": auth_model.observers,
-                "controllers": auth_model.controllers,
-            }
-            if auth_model
-            else None,
-            "type_safe": True,
-            "strict_mode": True,
-        }
-
-        # Generate certificate signature (hash of certificate data)
-        cert_json = json.dumps(certificate, sort_keys=True)
-        certificate["signature"] = hashlib.sha256(cert_json.encode()).hexdigest()
-
-        return json.dumps(certificate, indent=2)
 
     def get_audit_stats(self) -> dict:
         """

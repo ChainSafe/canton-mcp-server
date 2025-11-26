@@ -1,0 +1,71 @@
+module PaymentApproval where
+
+template PaymentProposal
+  with
+    alice   : Party
+    bob     : Party
+    carol   : Party
+    amount  : Decimal
+    currency: Text
+  where
+    -- Alice proposes, so she's the signatory.
+    signatory alice
+
+    -- Bob and Carol can see the proposal.
+    observer bob, carol
+
+    -- Bob must approve.
+    choice Approve : (ContractId PaymentApproved, ContractId CarolNotification)
+      controller bob
+      do
+        -- Archive the proposal
+        archive self
+
+        -- Create an approved payment contract
+        approvedCid <- create PaymentApproved
+          with
+            alice
+            bob
+            carol
+            amount
+            currency
+
+        -- Create a notification just for Carol
+        notifyCid <- create CarolNotification
+          with
+            carol
+            amount
+            currency
+            message = "Payment approved by Bob for Alice."
+
+        return (approvedCid, notifyCid)
+
+
+template PaymentApproved
+  with
+    alice   : Party
+    bob     : Party
+    carol   : Party
+    amount  : Decimal
+    currency: Text
+  where
+    -- Alice and Bob are the primary parties; Carol is informed as observer.
+    signatory alice, bob
+    observer carol
+
+
+template CarolNotification
+  with
+    carol   : Party
+    amount  : Decimal
+    currency: Text
+    message : Text
+  where
+    signatory carol
+
+    -- Carol can acknowledge/clear the notification.
+    choice Acknowledge : ()
+      controller carol
+      do
+        archive self
+

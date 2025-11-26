@@ -1,0 +1,47 @@
+-- Basic IOU pattern - Should validate cleanly
+module BasicIou where
+
+import Daml.Script
+
+template SimpleIou
+  with
+    payer: Party
+    owner: Party
+    amount: Decimal
+    currency: Text
+  where
+    signatory payer
+    observer owner
+    
+    ensure amount > 0.0
+    
+    choice Transfer : ContractId SimpleIou
+      with
+        newOwner: Party
+      controller owner
+      do
+        create this with owner = newOwner
+    
+    choice Settle : ()
+      controller payer
+      do
+        return ()
+
+-- Test script
+test_basic_iou : Script ()
+test_basic_iou = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+  
+  iouId <- submit alice do
+    createCmd SimpleIou with
+      payer = alice
+      owner = bob
+      amount = 100.0
+      currency = "USD"
+  
+  submit bob do
+    exerciseCmd iouId Settle
+  
+  return ()
+
