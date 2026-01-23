@@ -171,6 +171,9 @@ class PaymentHandler:
         self.canton_facilitator_url = get_env("CANTON_FACILITATOR_URL", "http://localhost:3000")
         self.canton_payee_party = get_env("CANTON_PAYEE_PARTY", "")
         self.canton_network = get_env("CANTON_NETWORK", "canton-local")
+        
+        # Combined payment enabled flag (either USDC or Canton)
+        self.any_payment_enabled = self.enabled or self.canton_enabled
 
         # Validate configurations if enabled
         if self.enabled:
@@ -273,7 +276,74 @@ class PaymentHandler:
             return True
         return False
 
-    def _build_payment_requirements(
+    async def _get_canton_payment_object(
+        self, request: Request, amount: str, resource: str, description: str
+    ) -> dict:
+        """
+        Get payment object from Canton facilitator.
+
+        Args:
+            request: FastAPI request object (to extract X-Canton-Party-ID header)
+            amount: Payment amount in CC (as string)
+            resource: Resource URL being paid for
+            description: Payment description
+
+        Returns:
+            Payment object dict containing TransferFactory, choiceContext, disclosedContracts
+
+        Raises:
+            PaymentConfigurationError: If facilitator call fails or header missing
+        """
+        import httpx
+
+        # Extract payer party ID from header (required)
+        payer_party = request.headers.get("X-Canton-Party-ID", "")
+        if not payer_party:
+            raise PaymentConfigurationError(
+                "X-Canton-Party-ID header required for Canton payments",
+                details={"header": "X-Canton-Party-ID", "status": "missing"},
+            )
+
+        # Call facilitator /payment-object endpoint
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    f"{self.canton_facilitator_url}/payment-object",
+                    json={
+                        "amount": amount,
+                        "merchantParty": self.canton_payee_party,
+                        "payerParty": payer_party,
+                        "resource": resource,
+                        "description": description,
+                    },
+                )
+
+                if response.status_code != 200:
+                    error_text = response.text
+                    logger.error(
+                        f"Facilitator /payment-object error: HTTP {response.status_code} - {error_text}"
+                    )
+                    raise PaymentConfigurationError(
+                        f"Facilitator error: {response.status_code}",
+                        details={"status_code": response.status_code, "error": error_text},
+                    )
+
+                payment_object_data = response.json()
+                return payment_object_data
+
+        except httpx.RequestError as e:
+            logger.error(f"Facilitator connection error: {e}")
+            raise PaymentConfigurationError(
+                f"Facilitator unavailable: {str(e)}",
+                details={"error": str(e), "facilitator_url": self.canton_facilitator_url},
+            )
+        except Exception as e:
+            logger.error(f"Unexpected error calling facilitator: {e}")
+            raise PaymentConfigurationError(
+                f"Payment object generation failed: {str(e)}", details={"error": str(e)}
+            )
+
+    async def _build_payment_requirements(
         self, request: Request, tool_name: str, arguments: dict
     ) -> list[PaymentRequirements]:
         """
@@ -327,8 +397,31 @@ class PaymentHandler:
         # Option 2: Canton Coins on Canton Network
         if self.canton_enabled and self.canton_payee_party:
             try:
-                # Direct USD-to-CC mapping (1:1 for ad-hoc stability)
-                # Note: Use dict instead of PaymentRequirements to avoid EVM-specific validation
+                # Get payment object from facilitator (includes TransferFactory, choiceContext, etc.)
+                # Note: Requires X-Canton-Party-ID header from client
+                try:
+                    payment_object_data = await self._get_canton_payment_object(
+                        request=request,
+                        amount=str(price_usd),
+                        resource=resource_url,
+                        description=f"MCP Tool: {tool_name} (Canton Coin)",
+                    )
+                except PaymentConfigurationError as e:
+                    # Re-raise configuration errors (missing header, facilitator unavailable)
+                    logger.warning(
+                        f"Canton payment object generation failed for '{tool_name}': {e.message}"
+                    )
+                    raise
+
+                # Extract payment object components
+                payment_object = payment_object_data.get("paymentObject", {})
+                transfer_factory = payment_object.get("transferFactory", {})
+                choice_context = payment_object.get("choiceContext", {})
+                disclosed_contracts = payment_object.get("transferFactory", {}).get(
+                    "disclosedContracts", []
+                )
+
+                # Build Canton payment requirement with TransferFactory details
                 canton_requirement = {
                     "scheme": "exact-canton",
                     "network": self.canton_network,
@@ -346,12 +439,25 @@ class PaymentHandler:
                     "extra": {
                         "facilitatorUrl": self.canton_facilitator_url,
                         "paymentType": "canton-daml-contract",
+                        # Include TransferFactory and context for client to use
+                        "transferFactory": transfer_factory,
+                        "choiceContext": choice_context,
+                        "disclosedContracts": disclosed_contracts,
+                        "paymentId": payment_object_data.get("paymentId"),  # For tracking
                     },
                 }
                 requirements.append(canton_requirement)
+            except PaymentConfigurationError:
+                # Re-raise configuration errors as-is (missing header, facilitator error)
+                raise
             except Exception as e:
-                logger.error(f"Error building Canton payment requirements for {tool_name}: {e}")
-                raise PaymentConfigurationError(f"Canton price configuration error: {str(e)}")
+                logger.error(
+                    f"Unexpected error building Canton payment requirements for {tool_name}: {e}",
+                    exc_info=True,
+                )
+                raise PaymentConfigurationError(
+                    f"Canton price configuration error: {str(e)}", details={"error": str(e)}
+                )
 
         return requirements
 
@@ -390,7 +496,7 @@ class PaymentHandler:
             return
 
         # Build payment requirements (may include both USDC and Canton options)
-        payment_requirements = self._build_payment_requirements(
+        payment_requirements = await self._build_payment_requirements(
             request, tool_name, arguments
         )
 
@@ -685,97 +791,26 @@ class PaymentHandler:
     async def _settle_canton_payment(
         self, request: Request, tool_name: str
     ) -> Optional[dict]:
-        """Settle Canton payment via Canton facilitator with retry logic"""
-        import httpx
+        """
+        Settle Canton payment - deprecated in new architecture.
         
-        requirements = request.state.x402_requirements
+        Note: In the new architecture, clients handle their own transactions.
+        The facilitator's /settle endpoint is deprecated and returns 501.
+        This method is kept for backward compatibility but will log a warning.
         
-        # Re-extract payment_dict from request header for Canton
-        payment_dict = json.loads(safe_base64_decode(request.headers.get("X-PAYMENT", "")))
-        
-        max_retries = 3
-        retry_delay = 1  # seconds
-        
-        for attempt in range(max_retries):
-            try:
-                async with httpx.AsyncClient(timeout=60.0) as client:
-                    response = await client.post(
-                        f"{self.canton_facilitator_url}/settle",
-                        json={
-                            "paymentPayload": payment_dict,  # Use raw dict, not model_dump()
-                            "paymentRequirements": requirements  # Already a dict
-                        }
-                    )
-                    
-                    if response.status_code != 200:
-                        logger.warning(
-                            f"Canton settlement HTTP error (attempt {attempt + 1}/{max_retries}): {response.status_code}"
-                        )
-                        if attempt < max_retries - 1:
-                            wait_time = retry_delay * (2**attempt)
-                            logger.info(f"Retrying Canton settlement in {wait_time}s...")
-                            await asyncio.sleep(wait_time)
-                        continue
-                    
-                    settle_result = response.json()
-                    
-                    if settle_result.get("success"):
-                        # Log settlement - only show attempt number if it's a retry
-                        if attempt > 0:
-                            logger.info(
-                                f"💵 Canton payment settled for '{tool_name}' (attempt {attempt + 1}/{max_retries})"
-                            )
-                        else:
-                            logger.info(f"💵 Canton payment settled for '{tool_name}'")
-                        
-                        return {
-                            "success": True,
-                            "transaction": settle_result.get("transaction"),
-                            "network": settle_result.get("network", self.canton_network),
-                            "payer": settle_result.get("payer"),
-                        }
-                    else:
-                        error_msg = settle_result.get("errorReason", "Unknown settlement error")
-                        logger.warning(
-                            f"Canton settlement failed (attempt {attempt + 1}/{max_retries}): {error_msg}"
-                        )
-                        
-                        # Retry with exponential backoff
-                        if attempt < max_retries - 1:
-                            wait_time = retry_delay * (2**attempt)
-                            logger.info(f"Retrying Canton settlement in {wait_time}s...")
-                            await asyncio.sleep(wait_time)
-                        else:
-                            # Final attempt failed - log for manual review
-                            logger.error(
-                                f"❌ Canton settlement failed after {max_retries} attempts for '{tool_name}': {error_msg}"
-                            )
-                            logger.error(
-                                f"Manual review required - Payment: {payment_dict}"
-                            )
-                            
-            except httpx.RequestError as e:
-                logger.error(
-                    f"Canton settlement connection error (attempt {attempt + 1}/{max_retries}): {e}"
-                )
-                if attempt < max_retries - 1:
-                    wait_time = retry_delay * (2**attempt)
-                    logger.info(f"Retrying after exception in {wait_time}s...")
-                    await asyncio.sleep(wait_time)
-                else:
-                    logger.error(
-                        f"❌ Canton settlement failed with exception after {max_retries} attempts"
-                    )
-            except Exception as e:
-                logger.error(
-                    f"Canton settlement unexpected error (attempt {attempt + 1}/{max_retries}): {e}"
-                )
-                if attempt < max_retries - 1:
-                    wait_time = retry_delay * (2**attempt)
-                    await asyncio.sleep(wait_time)
-                else:
-                    logger.error(f"❌ Canton settlement failed after {max_retries} attempts")
-        
+        Args:
+            request: FastAPI request object
+            tool_name: Name of the tool that was called
+
+        Returns:
+            None (settlement is not needed in new architecture)
+        """
+        logger.warning(
+            f"Canton payment settlement called for '{tool_name}' - "
+            "settlement is deprecated in new architecture. "
+            "Clients handle their own transactions."
+        )
+        # Return None - no settlement needed
         return None
 
     def create_payment_response_header(
