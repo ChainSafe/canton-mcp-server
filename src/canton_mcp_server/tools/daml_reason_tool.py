@@ -109,9 +109,8 @@ class DamlReasonTool(Tool[DamlReasonParams, DamlReasonResult]):
     result_model = DamlReasonResult
     
     pricing = ToolPricing(
-        type=PricingType.DYNAMIC,
-        base_cost=0.0,  # Dynamic cost based on LLM usage
-        description="Pay for actual LLM analysis cost (compilation + validation + pattern matching)"
+        type=PricingType.FIXED,
+        base_price=0.1,  # Fixed price: 0.1 USD (converts to CC via facilitator)
     )
 
     def __init__(self):
