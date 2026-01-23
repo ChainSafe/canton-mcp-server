@@ -214,10 +214,10 @@ async def handle_tool_call_request(mcp_request: JSONRPCRequest, request: Request
     # =============================================================================
     # Payment Verification (PHASE 1: Verify)
     # =============================================================================
-    # Only verify payment if payment system is enabled
+    # Only verify payment if payment system is enabled (USDC or Canton)
     # Settlement happens later in tool_handler.py based on execution outcome
 
-    if payment_handler.enabled:
+    if payment_handler.any_payment_enabled:
         try:
             # Verify payment for this tool call
             await payment_handler.verify_payment(request, tool_name, arguments)
