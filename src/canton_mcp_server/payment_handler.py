@@ -840,3 +840,79 @@ class PaymentHandler:
         except Exception as e:
             logger.warning(f"Error creating payment response header: {e}")
             return None
+
+
+# =============================================================================
+# Facilitator Registration (for pending payments queue)
+# =============================================================================
+
+
+async def register_with_facilitator(
+    payment_requirement: Dict[str, Any],
+    request_context: Dict[str, str],
+) -> bool:
+    """
+    Register pending payment with facilitator queue.
+    
+    This allows client-side wallets to automatically detect and execute payments
+    by polling the facilitator's /pending-payments endpoint.
+    
+    Args:
+        payment_requirement: Canton payment requirement dict (from accepts array)
+        request_context: Dict with partyId, tool, resource
+        
+    Returns:
+        True if registration succeeded, False otherwise
+    """
+    import httpx
+    
+    facilitator_url = get_env("CANTON_FACILITATOR_URL", "http://46.224.109.63:3000")
+    max_retries = 3
+    retry_delay = 0.1  # 100ms between retries
+    
+    for attempt in range(1, max_retries + 1):
+        try:
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                response = await client.post(
+                    f"{facilitator_url}/pending-payments",
+                    json={
+                        "paymentRequirements": {
+                            "scheme": payment_requirement.get("scheme"),
+                            "network": payment_requirement.get("network"),
+                            "maxAmountRequired": payment_requirement.get("maxAmountRequired"),
+                            "payTo": payment_requirement.get("payTo"),
+                            "resource": payment_requirement.get("resource"),
+                            "description": payment_requirement.get("description"),
+                            "maxTimeoutSeconds": payment_requirement.get("maxTimeoutSeconds", 60),
+                        },
+                        "requestContext": {
+                            "partyId": request_context["partyId"],
+                            "tool": request_context["tool"],
+                            "resource": request_context.get("resource") or payment_requirement.get("resource", ""),
+                        },
+                    },
+                )
+                
+                if response.status_code != 200:
+                    raise Exception(f"Facilitator returned {response.status_code}: {response.text}")
+                
+                result = response.json()
+                logger.info(f"✅ Registered payment with facilitator: {result.get('id')}")
+                return True
+                
+        except Exception as error:
+            is_last_attempt = attempt == max_retries
+            
+            if is_last_attempt:
+                logger.error(
+                    f"❌ Failed to register payment with facilitator after {max_retries} attempts: {error}"
+                )
+                logger.warning(
+                    "   ⚠️  Client will receive 402 but wallet won't auto-pay. Manual payment may be required."
+                )
+                return False
+            
+            # Retry with exponential backoff
+            await asyncio.sleep(retry_delay * attempt)
+    
+    return False

@@ -231,6 +231,30 @@ async def handle_tool_call_request(mcp_request: JSONRPCRequest, request: Request
                 "accepts": e.payment_requirements or [],
                 "error": e.message,
             }
+            
+            # Register with facilitator (async, non-blocking)
+            # Extract party ID and find Canton payment requirement
+            party_id = request.headers.get("X-Canton-Party-ID", "")
+            if party_id:
+                canton_req = next(
+                    (req for req in (e.payment_requirements or []) 
+                     if isinstance(req, dict) and req.get("scheme") == "exact-canton"),
+                    None
+                )
+                if canton_req:
+                    # Fire and forget - don't block 402 response
+                    from canton_mcp_server.payment_handler import register_with_facilitator
+                    asyncio.create_task(
+                        register_with_facilitator(
+                            canton_req,
+                            {
+                                "partyId": party_id,
+                                "tool": tool_name,
+                                "resource": canton_req.get("resource", ""),
+                            }
+                        )
+                    )
+            
             return JSONResponse(status_code=e.status_code, content=response_data)
         except PaymentVerificationError as e:
             # Payment verification failed - return x402 error response
