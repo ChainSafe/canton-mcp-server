@@ -233,14 +233,38 @@ async def handle_tool_call_request(mcp_request: JSONRPCRequest, request: Request
             }
             
             # Register with facilitator (async, non-blocking)
-            # Extract party ID and find Canton payment requirement
+            # Extract party ID (from header or use default) and find Canton payment requirement
             party_id = request.headers.get("X-Canton-Party-ID", "")
+            if not party_id:
+                # Use default party ID from config if header is missing
+                # This allows registration even when Cursor doesn't send the header
+                from canton_mcp_server.env import get_env
+                party_id = get_env("CANTON_DEFAULT_PAYER_PARTY", "")
+            
             if party_id:
                 canton_req = next(
                     (req for req in (e.payment_requirements or []) 
                      if isinstance(req, dict) and req.get("scheme") == "exact-canton"),
                     None
                 )
+                
+                # If no Canton requirement found (e.g., header was missing so requirements couldn't be built),
+                # create a simplified one for registration
+                if not canton_req and payment_handler.canton_enabled:
+                    from canton_mcp_server.env import get_env
+                    # Construct resource URL from request (same as payment_handler does)
+                    resource_url = str(request.url)
+                    canton_req = {
+                        "scheme": "exact-canton",
+                        "network": payment_handler.canton_network,
+                        "asset": "CC",
+                        "maxAmountRequired": str(payment_handler.get_tool_price(tool_name, arguments)),
+                        "resource": resource_url,
+                        "description": f"MCP Tool: {tool_name} (Canton Coin)",
+                        "maxTimeoutSeconds": 60,
+                        "payTo": payment_handler.canton_payee_party,
+                    }
+                
                 if canton_req:
                     # Fire and forget - don't block 402 response
                     from canton_mcp_server.payment_handler import register_with_facilitator
@@ -251,6 +275,11 @@ async def handle_tool_call_request(mcp_request: JSONRPCRequest, request: Request
                                 "partyId": party_id,
                                 "tool": tool_name,
                                 "resource": canton_req.get("resource", ""),
+                                "mcpRequest": {
+                                    "method": mcp_request.method,
+                                    "params": mcp_request.params or {},
+                                    "mcpServerUrl": canton_req.get("resource", ""),
+                                },
                             }
                         )
                     )

@@ -407,46 +407,81 @@ class PaymentHandler:
                         description=f"MCP Tool: {tool_name} (Canton Coin)",
                     )
                 except PaymentConfigurationError as e:
-                    # Re-raise configuration errors (missing header, facilitator unavailable)
-                    logger.warning(
-                        f"Canton payment object generation failed for '{tool_name}': {e.message}"
+                    # If header is missing, create simplified requirement instead of failing
+                    # This allows registration to work even when client doesn't send header
+                    if "X-Canton-Party-ID header required" in e.message or "header" in e.message.lower():
+                        logger.warning(
+                            f"Canton payment object generation skipped for '{tool_name}': {e.message}. "
+                            "Will create simplified requirement for registration."
+                        )
+                        # Create simplified Canton requirement (without TransferFactory)
+                        # This will be used for registration, and wallet can still execute payment
+                        canton_requirement = {
+                            "scheme": "exact-canton",
+                            "network": self.canton_network,
+                            "asset": "CC",  # Canton Coin
+                            "maxAmountRequired": str(price_usd),
+                            "resource": resource_url,
+                            "description": f"MCP Tool: {tool_name} (Canton Coin)",
+                            "mimeType": "application/json",
+                            "payTo": self.canton_payee_party,
+                            "maxTimeoutSeconds": 60,
+                            "outputSchema": {
+                                "input": {"type": "http", "method": "POST", "discoverable": True},
+                                "output": None,
+                            },
+                            "extra": {
+                                "facilitatorUrl": self.canton_facilitator_url,
+                                "paymentType": "canton-daml-contract",
+                                "simplified": True,  # Flag to indicate this is a simplified requirement
+                            },
+                        }
+                        requirements.append(canton_requirement)
+                        # Set to None to skip building full requirement below
+                        payment_object_data = None
+                    else:
+                        # For other configuration errors (facilitator unavailable, etc.), re-raise
+                        logger.warning(
+                            f"Canton payment object generation failed for '{tool_name}': {e.message}"
+                        )
+                        raise
+
+                # Only build full requirement if we successfully got payment_object_data
+                if payment_object_data:
+                    # Extract payment object components
+                    payment_object = payment_object_data.get("paymentObject", {})
+                    transfer_factory = payment_object.get("transferFactory", {})
+                    choice_context = payment_object.get("choiceContext", {})
+                    disclosed_contracts = payment_object.get("transferFactory", {}).get(
+                        "disclosedContracts", []
                     )
-                    raise
 
-                # Extract payment object components
-                payment_object = payment_object_data.get("paymentObject", {})
-                transfer_factory = payment_object.get("transferFactory", {})
-                choice_context = payment_object.get("choiceContext", {})
-                disclosed_contracts = payment_object.get("transferFactory", {}).get(
-                    "disclosedContracts", []
-                )
-
-                # Build Canton payment requirement with TransferFactory details
-                canton_requirement = {
-                    "scheme": "exact-canton",
-                    "network": self.canton_network,
-                    "asset": "CC",  # Canton Coin
-                    "maxAmountRequired": str(price_usd),
-                    "resource": resource_url,
-                    "description": f"MCP Tool: {tool_name} (Canton Coin)",
-                    "mimeType": "application/json",
-                    "payTo": self.canton_payee_party,
-                    "maxTimeoutSeconds": 60,
-                    "outputSchema": {
-                        "input": {"type": "http", "method": "POST", "discoverable": True},
-                        "output": None,
-                    },
-                    "extra": {
-                        "facilitatorUrl": self.canton_facilitator_url,
-                        "paymentType": "canton-daml-contract",
-                        # Include TransferFactory and context for client to use
-                        "transferFactory": transfer_factory,
-                        "choiceContext": choice_context,
-                        "disclosedContracts": disclosed_contracts,
-                        "paymentId": payment_object_data.get("paymentId"),  # For tracking
-                    },
-                }
-                requirements.append(canton_requirement)
+                    # Build Canton payment requirement with TransferFactory details
+                    canton_requirement = {
+                        "scheme": "exact-canton",
+                        "network": self.canton_network,
+                        "asset": "CC",  # Canton Coin
+                        "maxAmountRequired": str(price_usd),
+                        "resource": resource_url,
+                        "description": f"MCP Tool: {tool_name} (Canton Coin)",
+                        "mimeType": "application/json",
+                        "payTo": self.canton_payee_party,
+                        "maxTimeoutSeconds": 60,
+                        "outputSchema": {
+                            "input": {"type": "http", "method": "POST", "discoverable": True},
+                            "output": None,
+                        },
+                        "extra": {
+                            "facilitatorUrl": self.canton_facilitator_url,
+                            "paymentType": "canton-daml-contract",
+                            # Include TransferFactory and context for client to use
+                            "transferFactory": transfer_factory,
+                            "choiceContext": choice_context,
+                            "disclosedContracts": disclosed_contracts,
+                            "paymentId": payment_object_data.get("paymentId"),  # For tracking
+                        },
+                    }
+                    requirements.append(canton_requirement)
             except PaymentConfigurationError:
                 # Re-raise configuration errors as-is (missing header, facilitator error)
                 raise
@@ -889,6 +924,7 @@ async def register_with_facilitator(
                             "partyId": request_context["partyId"],
                             "tool": request_context["tool"],
                             "resource": request_context.get("resource") or payment_requirement.get("resource", ""),
+                            "mcpRequest": request_context.get("mcpRequest"),  # Include full MCP request for retry
                         },
                     },
                 )
