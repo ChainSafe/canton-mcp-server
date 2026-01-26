@@ -889,6 +889,7 @@ async def register_with_facilitator(
                             "partyId": request_context["partyId"],
                             "tool": request_context["tool"],
                             "resource": request_context.get("resource") or payment_requirement.get("resource", ""),
+                            "mcpRequest": request_context.get("mcpRequest"),  # Include full MCP request for retry
                         },
                     },
                 )
