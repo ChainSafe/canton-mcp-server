@@ -83,6 +83,17 @@ async def lifespan(app: FastAPI):
         )
         logger.info(f"   - {tool.name}: {tool.description[:60]}... ({pricing})")
 
+    # Connect to facilitator WebSocket if Canton payments enabled
+    if payment_handler.canton_enabled and payment_handler.ws_client:
+        try:
+            connected = await payment_handler.ws_client.connect()
+            if connected:
+                logger.info("🔌 Connected to facilitator WebSocket")
+            else:
+                logger.warning("⚠️  Failed to connect to facilitator WebSocket, will retry in background")
+        except Exception as e:
+            logger.warning(f"⚠️  Error connecting to facilitator WebSocket: {e}")
+
     # Start DCAP semantic_discover broadcasting
     broadcast_task = None
     from canton_mcp_server.core.dcap import is_dcap_enabled, broadcast_all_tools
@@ -118,6 +129,13 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     logger.info("Shutting down...")
+    
+    # Disconnect WebSocket on shutdown
+    if payment_handler.canton_enabled and payment_handler.ws_client:
+        try:
+            await payment_handler.ws_client.disconnect()
+        except Exception as e:
+            logger.warning(f"⚠️  Error disconnecting WebSocket: {e}")
     
     # Cancel broadcast task
     if broadcast_task:
@@ -262,8 +280,24 @@ async def handle_tool_call_request(mcp_request: JSONRPCRequest, request: Request
                             None
                         )
                         if canton_req:
+                            # Broadcast payment-required via WebSocket (preferred)
+                            if payment_handler.ws_client:
+                                price_usd = payment_handler.get_tool_price(tool_name, arguments)
+                                resource_url = str(request.url)
+                                payee = canton_req.get("payTo", payment_handler.canton_payee_party)
+                                
+                                asyncio.create_task(
+                                    payment_handler.ws_client.broadcast_payment_required(
+                                        party=party_id,
+                                        payee=payee,
+                                        amount=price_usd,
+                                        resource=resource_url,
+                                        tool=tool_name,
+                                    )
+                                )
+                            
+                            # Also register via HTTP (fallback/backward compatibility)
                             import httpx
-                            import asyncio
                             
                             async def register_pending_payment():
                                 try:
@@ -277,9 +311,9 @@ async def handle_tool_call_request(mcp_request: JSONRPCRequest, request: Request
                                                 "resource": canton_req.get("resource", ""),
                                             },
                                         )
-                                    logger.info(f"📝 Registered pending payment for '{tool_name}' with facilitator")
+                                    logger.info(f"📝 Registered pending payment for '{tool_name}' with facilitator (HTTP)")
                                 except Exception as reg_error:
-                                    logger.warning(f"Failed to register pending payment: {reg_error}")
+                                    logger.warning(f"Failed to register pending payment via HTTP: {reg_error}")
                             
                             # Fire and forget - don't block error response
                             asyncio.create_task(register_pending_payment())
