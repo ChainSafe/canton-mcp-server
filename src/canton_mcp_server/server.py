@@ -243,6 +243,47 @@ async def handle_tool_call_request(mcp_request: JSONRPCRequest, request: Request
             )
             # For Canton payments, return standard MCP error (not 402)
             if payment_handler.canton_enabled:
+                # Register pending payment with facilitator (async, non-blocking)
+                try:
+                    party_id = request.headers.get("X-Canton-Party-ID", "")
+                    if not party_id:
+                        party_id = request.query_params.get("payerParty", "")
+                    if not party_id:
+                        from canton_mcp_server.env import get_env
+                        party_id = get_env("CANTON_DEFAULT_PAYER_PARTY", "")
+                    
+                    if party_id and e.payment_requirements:
+                        # Find Canton payment requirement
+                        canton_req = next(
+                            (req for req in e.payment_requirements 
+                             if isinstance(req, dict) and req.get("scheme") == "exact-canton"),
+                            None
+                        )
+                        if canton_req:
+                            import httpx
+                            import asyncio
+                            
+                            async def register_pending_payment():
+                                try:
+                                    async with httpx.AsyncClient(timeout=5.0) as client:
+                                        await client.post(
+                                            f"{payment_handler.canton_facilitator_url}/pending-payments",
+                                            json={
+                                                "party": party_id,
+                                                "payee": canton_req.get("payTo", ""),
+                                                "amount": canton_req.get("maxAmountRequired", ""),
+                                                "resource": canton_req.get("resource", ""),
+                                            },
+                                        )
+                                    logger.info(f"📝 Registered pending payment for '{tool_name}' with facilitator")
+                                except Exception as reg_error:
+                                    logger.warning(f"Failed to register pending payment: {reg_error}")
+                            
+                            # Fire and forget - don't block error response
+                            asyncio.create_task(register_pending_payment())
+                except Exception as reg_error:
+                    logger.warning(f"Failed to register pending payment: {reg_error}")
+                
                 return error_response(
                     mcp_request.id,
                     ErrorCodes.INVALID_REQUEST,  # Use -32600 for payment required
