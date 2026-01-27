@@ -252,6 +252,8 @@ async def handle_tool_call_request(mcp_request: JSONRPCRequest, request: Request
                         from canton_mcp_server.env import get_env
                         party_id = get_env("CANTON_DEFAULT_PAYER_PARTY", "")
                     
+                    logger.info(f"🔍 Payment registration check: party_id={'SET' if party_id else 'MISSING'}, has_requirements={bool(e.payment_requirements)}")
+                    
                     if party_id and e.payment_requirements:
                         # Find Canton payment requirement
                         canton_req = next(

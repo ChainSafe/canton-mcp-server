@@ -528,8 +528,9 @@ class PaymentHandler:
 
         if not party_id:
             logger.warning(
-                f"No party ID found for payment check (tool: {tool_name}). "
-                "Payment check will fail."
+                f"⚠️  No party ID found for payment check (tool: {tool_name}). "
+                "Payment check will fail. "
+                "Set CANTON_DEFAULT_PAYER_PARTY env var or include payerParty in URL query params."
             )
             return False
 
@@ -565,11 +566,11 @@ class PaymentHandler:
                 if has_paid:
                     transaction_id = result.get("transactionId")
                     logger.info(
-                        f"✅ Payment found on-chain for '{tool_name}': {transaction_id or 'unknown'}"
+                        f"✅ Payment found on-chain for '{tool_name}': {transaction_id or 'unknown'} (party={party_id}, resource={resource_url})"
                     )
                 else:
                     logger.info(
-                        f"💰 Payment not found on-chain for '{tool_name}': ${price_usd:.4f}"
+                        f"💰 Payment not found on-chain for '{tool_name}': ${price_usd:.4f} (party={party_id}, resource={resource_url})"
                     )
 
                 return has_paid
