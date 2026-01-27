@@ -219,7 +219,8 @@ async def handle_tool_call_request(mcp_request: JSONRPCRequest, request: Request
     Handle tools/call with payment status check.
 
     Payment flow:
-    - PHASE 1: Check payment status (if enabled) - for Canton, checks on-chain
+    - PHASE 0: Check balance threshold (for Canton) - blocks if >= $2.00
+    - PHASE 1: Check payment status (if enabled) - for Canton, optimistic mode
     - PHASE 2: Execute tool (in tool_handler)
     - PHASE 3: Settle payment (in tool_handler) - for EVM only
     """
@@ -230,6 +231,34 @@ async def handle_tool_call_request(mcp_request: JSONRPCRequest, request: Request
 
     if not tool_name:
         return error_response(mcp_request.id, ErrorCodes.INVALID_PARAMS, "Missing tool name")
+
+    # =============================================================================
+    # Balance Threshold Check (PHASE 0: Gate Check for Canton)
+    # =============================================================================
+    # Check balance at request start - only blocking check
+    # If balance >= $2.00, deny access immediately
+    if payment_handler.canton_enabled and payment_handler.ws_client:
+        # Extract party ID
+        party_id = request.headers.get("X-Canton-Party-ID", "")
+        if not party_id:
+            party_id = request.query_params.get("payerParty", "")
+        if not party_id:
+            from canton_mcp_server.env import get_env
+            party_id = get_env("CANTON_DEFAULT_PAYER_PARTY", "")
+        
+        if party_id:
+            try:
+                balance = await payment_handler.ws_client.check_balance(party_id)
+                if balance >= 2.0:
+                    # Balance threshold exceeded - deny access with detailed message
+                    return error_response(
+                        mcp_request.id,
+                        ErrorCodes.INVALID_REQUEST,
+                        f"Access denied: You owe ${balance:.2f}. Please pay your balance before continuing.",
+                    )
+            except Exception as e:
+                logger.warning(f"⚠️  Error checking balance for party {party_id}: {e}")
+                # Continue optimistically if balance check fails
 
     # =============================================================================
     # Payment Verification (PHASE 1: Check Status)
@@ -371,6 +400,35 @@ async def handle_tool_call_request(mcp_request: JSONRPCRequest, request: Request
     # Streaming mode: return SSE stream
     if progress_token is not None:
         logger.debug(f"Progress token: {progress_token}")
+        
+        # Broadcast payment-required after response is generated (optimistic mode)
+        # For Canton payments, broadcast via WebSocket after tool execution starts
+        if payment_handler.canton_enabled and payment_handler.ws_client:
+            party_id = request.headers.get("X-Canton-Party-ID", "")
+            if not party_id:
+                party_id = request.query_params.get("payerParty", "")
+            if not party_id:
+                from canton_mcp_server.env import get_env
+                party_id = get_env("CANTON_DEFAULT_PAYER_PARTY", "")
+            
+            if party_id:
+                price_usd = payment_handler.get_tool_price(tool_name, arguments)
+                if price_usd > 0.0:  # Only broadcast for paid tools
+                    resource_url = str(request.url)
+                    payee = payment_handler.canton_payee_party
+                    
+                    # Broadcast asynchronously (fire and forget)
+                    asyncio.create_task(
+                        payment_handler.ws_client.broadcast_payment_required(
+                            party=party_id,
+                            payee=payee,
+                            amount=price_usd,
+                            resource=resource_url,
+                            tool=tool_name,
+                        )
+                    )
+                    logger.debug(f"📤 Broadcasted payment-required for '{tool_name}' (streaming mode)")
+        
         return StreamingResponse(
             create_sse_stream(tool_generator),
             media_type="text/event-stream",
@@ -385,6 +443,34 @@ async def handle_tool_call_request(mcp_request: JSONRPCRequest, request: Request
     # Non-streaming mode: collect and return final result
     final_response = await collect_final_result(tool_generator)
     if final_response:
+        # Broadcast payment-required after response is generated (optimistic mode)
+        # For Canton payments, broadcast via WebSocket after successful tool execution
+        if payment_handler.canton_enabled and payment_handler.ws_client:
+            party_id = request.headers.get("X-Canton-Party-ID", "")
+            if not party_id:
+                party_id = request.query_params.get("payerParty", "")
+            if not party_id:
+                from canton_mcp_server.env import get_env
+                party_id = get_env("CANTON_DEFAULT_PAYER_PARTY", "")
+            
+            if party_id:
+                price_usd = payment_handler.get_tool_price(tool_name, arguments)
+                if price_usd > 0.0:  # Only broadcast for paid tools
+                    resource_url = str(request.url)
+                    payee = payment_handler.canton_payee_party
+                    
+                    # Broadcast asynchronously (fire and forget)
+                    asyncio.create_task(
+                        payment_handler.ws_client.broadcast_payment_required(
+                            party=party_id,
+                            payee=payee,
+                            amount=price_usd,
+                            resource=resource_url,
+                            tool=tool_name,
+                        )
+                    )
+                    logger.debug(f"📤 Broadcasted payment-required for '{tool_name}' (non-streaming mode)")
+        
         return JSONResponse(content=final_response.to_camel_dict())
 
     return error_response(

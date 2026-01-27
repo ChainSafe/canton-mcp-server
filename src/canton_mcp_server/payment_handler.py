@@ -623,40 +623,21 @@ class PaymentHandler:
             logger.debug(f"💸 Tool '{tool_name}' is free ($0.00) - skipping payment")
             return
 
-        # For Canton payments: check balance first, then on-chain payment status
+        # For Canton payments: optimistic serving mode
+        # Balance check happens at request start (in server.py), not here
+        # On-chain payment check is non-blocking - we serve optimistically
         if self.canton_enabled:
-            # Extract party ID
+            # Extract party ID for potential use in broadcast
             party_id = request.headers.get("X-Canton-Party-ID", "")
             if not party_id:
                 party_id = request.query_params.get("payerParty", "")
             if not party_id:
                 party_id = get_env("CANTON_DEFAULT_PAYER_PARTY", "")
             
-            # Check balance via WebSocket (or HTTP fallback)
-            if self.ws_client and party_id:
-                balance = await self.ws_client.check_balance(party_id)
-                if balance >= 2.0:
-                    # Balance threshold exceeded - deny access
-                    payment_requirements = await self._build_payment_requirements(
-                        request, tool_name, arguments
-                    )
-                    raise PaymentVerificationError(
-                        f"Access denied: Balance threshold exceeded (${balance:.2f} >= $2.00). Please make a payment to continue.",
-                        payment_requirements,
-                    )
-            
-            # Check on-chain payment status
-            has_paid = await self.check_payment_status(request, tool_name, arguments)
-            if not has_paid:
-                # Build payment requirements for error message
-                payment_requirements = await self._build_payment_requirements(
-                    request, tool_name, arguments
-                )
-                raise PaymentVerificationError(
-                    "Payment required. Please ensure payment has been executed for this resource.",
-                    payment_requirements,
-                )
-            # Payment found on-chain - proceed
+            # Optimistic mode: don't block on payment verification
+            # Payment will be broadcast after response is sent
+            # Balance threshold check happens at request start in server.py
+            logger.debug(f"💸 Canton optimistic mode: serving '{tool_name}' without pre-check")
             return
 
         # For EVM payments: use x402 X-PAYMENT header verification (existing flow)
