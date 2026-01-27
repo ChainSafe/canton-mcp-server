@@ -13,7 +13,7 @@ import logging
 from datetime import datetime
 from typing import Dict, Optional, Callable
 import websockets
-from websockets.exceptions import ConnectionClosed, WebSocketException
+from websockets.exceptions import ConnectionClosed
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +120,7 @@ class FacilitatorWebSocketClient:
         while not self.connected:
             try:
                 await asyncio.sleep(delay)
-                logger.info(f"🔄 Attempting to reconnect to facilitator WebSocket...")
+                logger.info("🔄 Attempting to reconnect to facilitator WebSocket...")
                 success = await self.connect()
                 if success:
                     break
