@@ -11,11 +11,16 @@ import asyncio
 import json
 import logging
 from datetime import datetime
-from typing import Dict, Optional, Callable
+from typing import Dict, Optional
+import httpx
 import websockets
-from websockets.exceptions import ConnectionClosed
+from websockets.exceptions import ConnectionClosed, WebSocketException
 
 logger = logging.getLogger(__name__)
+
+# Constants
+RECONNECT_DELAY = 5  # seconds
+MAX_RECONNECT_DELAY = 60  # seconds
 
 
 class FacilitatorWebSocketClient:
@@ -28,13 +33,13 @@ class FacilitatorWebSocketClient:
         Args:
             facilitator_url: Base URL of facilitator (e.g., http://localhost:3000)
         """
-        # Convert HTTP URL to WebSocket URL
+        # Store both HTTP and WebSocket URLs to avoid repeated conversion
+        self.facilitator_url = facilitator_url
         ws_url = facilitator_url.replace("http://", "ws://").replace("https://", "wss://")
         self.ws_url = f"{ws_url}/ws"
         self.websocket: Optional[websockets.WebSocketClientProtocol] = None
         self.connected = False
         self.balance_cache: Dict[str, float] = {}  # party -> balance
-        self.reconnect_delay = 5  # seconds
         self.listen_task: Optional[asyncio.Task] = None
 
     async def connect(self) -> bool:
@@ -52,7 +57,7 @@ class FacilitatorWebSocketClient:
             # Start listening for messages
             self.listen_task = asyncio.create_task(self._listen())
             return True
-        except Exception as e:
+        except (WebSocketException, OSError) as e:
             logger.error(f"❌ Failed to connect to facilitator WebSocket: {e}")
             self.connected = False
             return False
@@ -88,7 +93,9 @@ class FacilitatorWebSocketClient:
                 break
             except asyncio.CancelledError:
                 break
-            except Exception as e:
+            except json.JSONDecodeError as e:
+                logger.error(f"❌ Error decoding WebSocket message: {e}")
+            except WebSocketException as e:
                 logger.error(f"❌ Error receiving WebSocket message: {e}")
                 await asyncio.sleep(1)
 
@@ -115,8 +122,7 @@ class FacilitatorWebSocketClient:
 
     async def _reconnect(self):
         """Reconnect to WebSocket server with exponential backoff"""
-        delay = self.reconnect_delay
-        max_delay = 60
+        delay = RECONNECT_DELAY
         while not self.connected:
             try:
                 await asyncio.sleep(delay)
@@ -124,10 +130,10 @@ class FacilitatorWebSocketClient:
                 success = await self.connect()
                 if success:
                     break
-                delay = min(delay * 2, max_delay)
-            except Exception as e:
+                delay = min(delay * 2, MAX_RECONNECT_DELAY)
+            except (WebSocketException, OSError) as e:
                 logger.error(f"❌ Reconnection attempt failed: {e}")
-                delay = min(delay * 2, max_delay)
+                delay = min(delay * 2, MAX_RECONNECT_DELAY)
 
     async def check_balance(self, party: str) -> float:
         """
@@ -147,11 +153,9 @@ class FacilitatorWebSocketClient:
         
         # Fallback to HTTP query if not cached
         try:
-            import httpx
-            facilitator_url = self.ws_url.replace("/ws", "").replace("ws://", "http://").replace("wss://", "https://")
             async with httpx.AsyncClient(timeout=5.0) as client:
                 response = await client.get(
-                    f"{facilitator_url}/balance",
+                    f"{self.facilitator_url}/balance",
                     params={"party": party},
                 )
                 if response.status_code == 200:
@@ -159,7 +163,7 @@ class FacilitatorWebSocketClient:
                     balance = result.get("balance", 0)
                     self.balance_cache[party] = balance
                     return balance
-        except Exception as e:
+        except httpx.RequestError as e:
             logger.warning(f"⚠️  Failed to query balance via HTTP: {e}")
         
         return 0.0  # Default to 0 if query fails
@@ -201,8 +205,8 @@ class FacilitatorWebSocketClient:
         try:
             await self.websocket.send(json.dumps(message))
             logger.info(f"📤 Broadcasted payment-required: {tool} (${amount:.2f}) for {party}")
-        except Exception as e:
-            logger.error(f"❌ Failed to broadcast payment-required: {e}")
+        except (ConnectionClosed, WebSocketException) as e:
+            logger.error(f"❌ Failed to broadcast payment-required, connection closed: {e}")
             # Attempt reconnect
             self.connected = False
             asyncio.create_task(self._reconnect())
