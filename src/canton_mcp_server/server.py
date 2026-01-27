@@ -8,15 +8,13 @@ and streaming support.
 """
 
 import asyncio
-import base64
 import datetime
 import json
 import logging
 import uuid
 from contextlib import asynccontextmanager
-from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
