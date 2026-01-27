@@ -233,10 +233,10 @@ async def handle_tool_call_request(mcp_request: JSONRPCRequest, request: Request
         return error_response(mcp_request.id, ErrorCodes.INVALID_PARAMS, "Missing tool name")
 
     # =============================================================================
-    # Balance Threshold Check (PHASE 0: Gate Check for Canton)
+    # Balance Threshold Check (PHASE 0: Fast Non-blocking Gate Check for Canton)
     # =============================================================================
-    # Check balance at request start - only blocking check
-    # If balance >= $2.00, deny access immediately
+    # Check balance with very short timeout - if it fails/hangs, serve optimistically
+    # Only block if we successfully get balance >= $2.00 within 0.5 seconds
     if payment_handler.canton_enabled and payment_handler.ws_client:
         # Extract party ID
         party_id = request.headers.get("X-Canton-Party-ID", "")
@@ -248,7 +248,11 @@ async def handle_tool_call_request(mcp_request: JSONRPCRequest, request: Request
         
         if party_id:
             try:
-                balance = await payment_handler.ws_client.check_balance(party_id)
+                # Very fast balance check - 0.5 second max, then give up
+                balance = await asyncio.wait_for(
+                    payment_handler.ws_client.check_balance(party_id),
+                    timeout=0.5  # 500ms max - if it takes longer, serve optimistically
+                )
                 if balance >= 2.0:
                     # Balance threshold exceeded - deny access with detailed message
                     return error_response(
@@ -256,9 +260,10 @@ async def handle_tool_call_request(mcp_request: JSONRPCRequest, request: Request
                         ErrorCodes.INVALID_REQUEST,
                         f"Access denied: You owe ${balance:.2f}. Please pay your balance before continuing.",
                     )
-            except Exception as e:
-                logger.warning(f"⚠️  Error checking balance for party {party_id}: {e}")
-                # Continue optimistically if balance check fails
+            except (asyncio.TimeoutError, Exception):
+                # Any error or timeout - serve optimistically (don't log, too noisy)
+                # Balance check failed/hung - continue with optimistic serving
+                pass
 
     # =============================================================================
     # Payment Verification (PHASE 1: Check Status)
