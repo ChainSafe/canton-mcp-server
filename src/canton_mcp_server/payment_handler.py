@@ -24,6 +24,7 @@ from x402.types import PaymentPayload, PaymentRequirements, SupportedNetworks
 from . import tools  # noqa: F401 - Import to trigger tool registration
 from .core import get_registry
 from .env import get_env, get_env_bool
+from .websocket_client import FacilitatorWebSocketClient
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +172,11 @@ class PaymentHandler:
         self.canton_facilitator_url = get_env("CANTON_FACILITATOR_URL", "http://localhost:3000")
         self.canton_payee_party = get_env("CANTON_PAYEE_PARTY", "")
         self.canton_network = get_env("CANTON_NETWORK", "canton-local")
+        
+        # WebSocket client for real-time payment coordination
+        self.ws_client: Optional[FacilitatorWebSocketClient] = None
+        if self.canton_enabled:
+            self.ws_client = FacilitatorWebSocketClient(self.canton_facilitator_url)
         
         # Combined payment enabled flag (either USDC or Canton)
         self.any_payment_enabled = self.enabled or self.canton_enabled
@@ -617,8 +623,29 @@ class PaymentHandler:
             logger.debug(f"💸 Tool '{tool_name}' is free ($0.00) - skipping payment")
             return
 
-        # For Canton payments: check on-chain payment status
+        # For Canton payments: check balance first, then on-chain payment status
         if self.canton_enabled:
+            # Extract party ID
+            party_id = request.headers.get("X-Canton-Party-ID", "")
+            if not party_id:
+                party_id = request.query_params.get("payerParty", "")
+            if not party_id:
+                party_id = get_env("CANTON_DEFAULT_PAYER_PARTY", "")
+            
+            # Check balance via WebSocket (or HTTP fallback)
+            if self.ws_client and party_id:
+                balance = await self.ws_client.check_balance(party_id)
+                if balance >= 2.0:
+                    # Balance threshold exceeded - deny access
+                    payment_requirements = await self._build_payment_requirements(
+                        request, tool_name, arguments
+                    )
+                    raise PaymentVerificationError(
+                        f"Access denied: Balance threshold exceeded (${balance:.2f} >= $2.00). Please make a payment to continue.",
+                        payment_requirements,
+                    )
+            
+            # Check on-chain payment status
             has_paid = await self.check_payment_status(request, tool_name, arguments)
             if not has_paid:
                 # Build payment requirements for error message
