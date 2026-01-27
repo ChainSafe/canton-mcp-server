@@ -40,7 +40,13 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Build Docker image
-        run: docker compose build
+        env:
+          DOCKER_BUILDKIT: 0  # Disable BuildKit to avoid snapshot corruption issues
+        run: |
+          # Clear any existing cache
+          docker builder prune -f || true
+          # Build using legacy builder (more stable)
+          docker compose build
 
       - name: Verify image was built
         run: docker images | grep canton-mcp-server
