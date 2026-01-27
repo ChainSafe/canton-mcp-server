@@ -496,12 +496,98 @@ class PaymentHandler:
 
         return requirements
 
+    async def check_payment_status(
+        self, request: Request, tool_name: str, arguments: dict
+    ) -> bool:
+        """
+        Check if payment exists on-chain for Canton payments.
+        Uses facilitator's /check-payment-status endpoint.
+
+        Args:
+            request: FastAPI request object
+            tool_name: Name of the tool being called
+            arguments: Tool arguments
+
+        Returns:
+            True if payment found, False otherwise
+
+        Raises:
+            PaymentConfigurationError: If payment configuration is invalid
+        """
+        # Only check for Canton payments
+        if not self.canton_enabled:
+            return True  # Skip check if Canton not enabled
+
+        # Extract party ID (from header, URL query param, or default)
+        party_id = request.headers.get("X-Canton-Party-ID", "")
+        if not party_id:
+            party_id = request.query_params.get("payerParty", "")
+        if not party_id:
+            from canton_mcp_server.env import get_env
+            party_id = get_env("CANTON_DEFAULT_PAYER_PARTY", "")
+
+        if not party_id:
+            logger.warning(
+                f"No party ID found for payment check (tool: {tool_name}). "
+                "Payment check will fail."
+            )
+            return False
+
+        # Get tool price and resource URL
+        price_usd = self.get_tool_price(tool_name, arguments)
+        resource_url = str(request.url)
+
+        # Call facilitator /check-payment-status endpoint
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(
+                    f"{self.canton_facilitator_url}/check-payment-status",
+                    params={
+                        "party": party_id,
+                        "payee": self.canton_payee_party,
+                        "resource": resource_url,
+                        "amount": str(price_usd),
+                        "network": self.canton_network,
+                    },
+                )
+
+                if response.status_code != 200:
+                    logger.error(
+                        f"Facilitator /check-payment-status error: HTTP {response.status_code} - {response.text}"
+                    )
+                    return False
+
+                result = response.json()
+                has_paid = result.get("hasPaid", False)
+
+                if has_paid:
+                    transaction_id = result.get("transactionId")
+                    logger.info(
+                        f"✅ Payment found on-chain for '{tool_name}': {transaction_id or 'unknown'}"
+                    )
+                else:
+                    logger.info(
+                        f"💰 Payment not found on-chain for '{tool_name}': ${price_usd:.4f}"
+                    )
+
+                return has_paid
+
+        except httpx.RequestError as e:
+            logger.error(f"Facilitator connection error: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error checking payment status: {e}")
+            return False
+
     async def verify_payment(
         self, request: Request, tool_name: str, arguments: dict
     ) -> None:
         """
-        Verify x402 payment for MCP tool call.
-        Routes to appropriate facilitator based on payment scheme.
+        Verify payment for MCP tool call.
+        For Canton: checks on-chain payment status.
+        For EVM: uses x402 X-PAYMENT header verification.
 
         Args:
             request: FastAPI request object
@@ -509,7 +595,7 @@ class PaymentHandler:
             arguments: Tool arguments
 
         Raises:
-            PaymentRequiredError: If payment is required but not provided
+            PaymentRequiredError: If payment is required but not provided (EVM only)
             PaymentVerificationError: If payment verification fails
             PaymentConfigurationError: If payment configuration is invalid
         """
@@ -530,41 +616,49 @@ class PaymentHandler:
             logger.debug(f"💸 Tool '{tool_name}' is free ($0.00) - skipping payment")
             return
 
-        # Build payment requirements (may include both USDC and Canton options)
-        payment_requirements = await self._build_payment_requirements(
-            request, tool_name, arguments
-        )
+        # For Canton payments: check on-chain payment status
+        if self.canton_enabled:
+            has_paid = await self.check_payment_status(request, tool_name, arguments)
+            if not has_paid:
+                # Build payment requirements for error message
+                payment_requirements = await self._build_payment_requirements(
+                    request, tool_name, arguments
+                )
+                raise PaymentVerificationError(
+                    "Payment required. Please ensure payment has been executed for this resource.",
+                    payment_requirements,
+                )
+            # Payment found on-chain - proceed
+            return
 
-        # Check for payment header
-        payment_header = request.headers.get("X-PAYMENT", "")
-
-        if not payment_header:
-            logger.info(
-                f"💰 Payment required for '{tool_name}': ${self.get_tool_price(tool_name, arguments):.4f}"
+        # For EVM payments: use x402 X-PAYMENT header verification (existing flow)
+        if self.enabled:
+            # Build payment requirements (may include both USDC and Canton options)
+            payment_requirements = await self._build_payment_requirements(
+                request, tool_name, arguments
             )
-            raise PaymentRequiredError(
-                "No X-PAYMENT header provided", payment_requirements
-            )
 
-        # Parse payment payload - check scheme first to avoid EVM validation on Canton payments
-        try:
-            payment_dict = json.loads(safe_base64_decode(payment_header))
-            payment_scheme = payment_dict.get("scheme", "")
-            
-            if payment_scheme == "exact-canton":
-                # Canton payment - don't parse with PaymentPayload (EVM-specific model)
-                # Pass raw dict to Canton handler
-                await self._verify_canton_payment(request, payment_dict, payment_requirements, tool_name, arguments)
-            else:
-                # EVM payment - parse with PaymentPayload model
+            # Check for payment header
+            payment_header = request.headers.get("X-PAYMENT", "")
+
+            if not payment_header:
+                logger.info(
+                    f"💰 Payment required for '{tool_name}': ${self.get_tool_price(tool_name, arguments):.4f}"
+                )
+                raise PaymentRequiredError(
+                    "No X-PAYMENT header provided", payment_requirements
+                )
+
+            # Parse payment payload - EVM payment
+            try:
+                payment_dict = json.loads(safe_base64_decode(payment_header))
                 payment = PaymentPayload(**payment_dict)
                 await self._verify_evm_payment(request, payment, payment_requirements, tool_name, arguments)
-                
-        except Exception as e:
-            logger.warning(f"Invalid payment header: {e}")
-            raise PaymentVerificationError(
-                "Invalid payment header format", payment_requirements
-            )
+            except Exception as e:
+                logger.warning(f"Invalid payment header: {e}")
+                raise PaymentVerificationError(
+                    "Invalid payment header format", payment_requirements
+                )
 
     async def _verify_canton_payment(
         self, request: Request, payment_dict: dict, payment_requirements: list,
@@ -877,78 +971,3 @@ class PaymentHandler:
             return None
 
 
-# =============================================================================
-# Facilitator Registration (for pending payments queue)
-# =============================================================================
-
-
-async def register_with_facilitator(
-    payment_requirement: Dict[str, Any],
-    request_context: Dict[str, str],
-) -> bool:
-    """
-    Register pending payment with facilitator queue.
-    
-    This allows client-side wallets to automatically detect and execute payments
-    by polling the facilitator's /pending-payments endpoint.
-    
-    Args:
-        payment_requirement: Canton payment requirement dict (from accepts array)
-        request_context: Dict with partyId, tool, resource
-        
-    Returns:
-        True if registration succeeded, False otherwise
-    """
-    import httpx
-    
-    facilitator_url = get_env("CANTON_FACILITATOR_URL", "http://46.224.109.63:3000")
-    max_retries = 3
-    retry_delay = 0.1  # 100ms between retries
-    
-    for attempt in range(1, max_retries + 1):
-        try:
-            async with httpx.AsyncClient(timeout=2.0) as client:
-                response = await client.post(
-                    f"{facilitator_url}/pending-payments",
-                    json={
-                        "paymentRequirements": {
-                            "scheme": payment_requirement.get("scheme"),
-                            "network": payment_requirement.get("network"),
-                            "maxAmountRequired": payment_requirement.get("maxAmountRequired"),
-                            "payTo": payment_requirement.get("payTo"),
-                            "resource": payment_requirement.get("resource"),
-                            "description": payment_requirement.get("description"),
-                            "maxTimeoutSeconds": payment_requirement.get("maxTimeoutSeconds", 60),
-                        },
-                        "requestContext": {
-                            "partyId": request_context["partyId"],
-                            "tool": request_context["tool"],
-                            "resource": request_context.get("resource") or payment_requirement.get("resource", ""),
-                            "mcpRequest": request_context.get("mcpRequest"),  # Include full MCP request for retry
-                        },
-                    },
-                )
-                
-                if response.status_code != 200:
-                    raise Exception(f"Facilitator returned {response.status_code}: {response.text}")
-                
-                result = response.json()
-                logger.info(f"✅ Registered payment with facilitator: {result.get('id')}")
-                return True
-                
-        except Exception as error:
-            is_last_attempt = attempt == max_retries
-            
-            if is_last_attempt:
-                logger.error(
-                    f"❌ Failed to register payment with facilitator after {max_retries} attempts: {error}"
-                )
-                logger.warning(
-                    "   ⚠️  Client will receive 402 but wallet won't auto-pay. Manual payment may be required."
-                )
-                return False
-            
-            # Retry with exponential backoff
-            await asyncio.sleep(retry_delay * attempt)
-    
-    return False
