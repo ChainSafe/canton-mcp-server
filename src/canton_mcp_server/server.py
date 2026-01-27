@@ -8,13 +8,15 @@ and streaming support.
 """
 
 import asyncio
+import base64
 import datetime
 import json
 import logging
 import uuid
 from contextlib import asynccontextmanager
+from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -149,6 +151,8 @@ app.add_middleware(
 )
 
 
+
+
 # =============================================================================
 # Helper Functions
 # =============================================================================
@@ -196,12 +200,12 @@ async def collect_final_result(generator):
 
 async def handle_tool_call_request(mcp_request: JSONRPCRequest, request: Request):
     """
-    Handle tools/call with x402 payment verification.
+    Handle tools/call with payment status check.
 
     Payment flow:
-    - PHASE 1: Verify payment (if enabled)
+    - PHASE 1: Check payment status (if enabled) - for Canton, checks on-chain
     - PHASE 2: Execute tool (in tool_handler)
-    - PHASE 3: Settle payment (in tool_handler)
+    - PHASE 3: Settle payment (in tool_handler) - for EVM only
     """
     params = mcp_request.params or {}
     tool_name = params.get("name")
@@ -212,7 +216,7 @@ async def handle_tool_call_request(mcp_request: JSONRPCRequest, request: Request
         return error_response(mcp_request.id, ErrorCodes.INVALID_PARAMS, "Missing tool name")
 
     # =============================================================================
-    # Payment Verification (PHASE 1: Verify)
+    # Payment Verification (PHASE 1: Check Status)
     # =============================================================================
     # Only verify payment if payment system is enabled (USDC or Canton)
     # Settlement happens later in tool_handler.py based on execution outcome
@@ -220,9 +224,11 @@ async def handle_tool_call_request(mcp_request: JSONRPCRequest, request: Request
     if payment_handler.any_payment_enabled:
         try:
             # Verify payment for this tool call
+            # For Canton: checks on-chain payment status
+            # For EVM: uses x402 X-PAYMENT header verification
             await payment_handler.verify_payment(request, tool_name, arguments)
         except PaymentRequiredError as e:
-            # Payment required but not provided - return x402 response
+            # Payment required but not provided (EVM only - x402 flow)
             logger.warning(
                 f"💰 Payment required for '{tool_name}': {e.message}"
             )
@@ -231,74 +237,28 @@ async def handle_tool_call_request(mcp_request: JSONRPCRequest, request: Request
                 "accepts": e.payment_requirements or [],
                 "error": e.message,
             }
-            
-            # Register with facilitator (async, non-blocking)
-            # Extract party ID (from header, URL query param, or default)
-            party_id = request.headers.get("X-Canton-Party-ID", "")
-            if not party_id:
-                # Get from URL query parameter (set in mcp.json: url?payerParty=...)
-                party_id = request.query_params.get("payerParty", "")
-            if not party_id:
-                # Use default party ID from config if header and query param are missing
-                from canton_mcp_server.env import get_env
-                party_id = get_env("CANTON_DEFAULT_PAYER_PARTY", "")
-            
-            if party_id:
-                canton_req = next(
-                    (req for req in (e.payment_requirements or []) 
-                     if isinstance(req, dict) and req.get("scheme") == "exact-canton"),
-                    None
-                )
-                
-                # If no Canton requirement found (e.g., header was missing so requirements couldn't be built),
-                # create a simplified one for registration
-                if not canton_req and payment_handler.canton_enabled:
-                    from canton_mcp_server.env import get_env
-                    # Construct resource URL from request (same as payment_handler does)
-                    resource_url = str(request.url)
-                    canton_req = {
-                        "scheme": "exact-canton",
-                        "network": payment_handler.canton_network,
-                        "asset": "CC",
-                        "maxAmountRequired": str(payment_handler.get_tool_price(tool_name, arguments)),
-                        "resource": resource_url,
-                        "description": f"MCP Tool: {tool_name} (Canton Coin)",
-                        "maxTimeoutSeconds": 60,
-                        "payTo": payment_handler.canton_payee_party,
-                    }
-                
-                if canton_req:
-                    # Fire and forget - don't block 402 response
-                    from canton_mcp_server.payment_handler import register_with_facilitator
-                    asyncio.create_task(
-                        register_with_facilitator(
-                            canton_req,
-                            {
-                                "partyId": party_id,
-                                "tool": tool_name,
-                                "resource": canton_req.get("resource", ""),
-                                "mcpRequest": {
-                                    "method": mcp_request.method,
-                                    "params": mcp_request.params or {},
-                                    "mcpServerUrl": canton_req.get("resource", ""),
-                                },
-                            }
-                        )
-                    )
-            
             return JSONResponse(status_code=e.status_code, content=response_data)
         except PaymentVerificationError as e:
-            # Payment verification failed - return x402 error response
+            # Payment verification failed - return MCP error (not 402 for Canton)
             logger.error(
                 f"💰 Payment verification failed for '{tool_name}': {e.message}"
             )
-            response_data = {
-                "x402Version": 1,
-                "accepts": e.payment_requirements or [],
-                "error": e.message,
-                "errorCode": e.error_data.error_code,
-            }
-            return JSONResponse(status_code=e.status_code, content=response_data)
+            # For Canton payments, return standard MCP error (not 402)
+            if payment_handler.canton_enabled:
+                return error_response(
+                    mcp_request.id,
+                    ErrorCodes.INVALID_REQUEST,  # Use -32600 for payment required
+                    e.message,
+                )
+            else:
+                # For EVM, return x402 response
+                response_data = {
+                    "x402Version": 1,
+                    "accepts": e.payment_requirements or [],
+                    "error": e.message,
+                    "errorCode": e.error_data.error_code,
+                }
+                return JSONResponse(status_code=e.status_code, content=response_data)
         except PaymentConfigurationError as e:
             # Payment configuration error - return 500 response
             logger.error(
