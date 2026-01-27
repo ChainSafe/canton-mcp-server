@@ -233,11 +233,13 @@ async def handle_tool_call_request(mcp_request: JSONRPCRequest, request: Request
             }
             
             # Register with facilitator (async, non-blocking)
-            # Extract party ID (from header or use default) and find Canton payment requirement
+            # Extract party ID (from header, URL query param, or default)
             party_id = request.headers.get("X-Canton-Party-ID", "")
             if not party_id:
-                # Use default party ID from config if header is missing
-                # This allows registration even when Cursor doesn't send the header
+                # Get from URL query parameter (set in mcp.json: url?payerParty=...)
+                party_id = request.query_params.get("payerParty", "")
+            if not party_id:
+                # Use default party ID from config if header and query param are missing
                 from canton_mcp_server.env import get_env
                 party_id = get_env("CANTON_DEFAULT_PAYER_PARTY", "")
             
