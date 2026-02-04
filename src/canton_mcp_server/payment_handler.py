@@ -172,11 +172,15 @@ class PaymentHandler:
         self.canton_facilitator_url = get_env("CANTON_FACILITATOR_URL", "http://localhost:3000")
         self.canton_payee_party = get_env("CANTON_PAYEE_PARTY", "")
         self.canton_network = get_env("CANTON_NETWORK", "canton-local")
+        self.canton_facilitator_api_key = get_env("CANTON_FACILITATOR_API_KEY", "")
         
         # WebSocket client for real-time payment coordination
         self.ws_client: Optional[FacilitatorWebSocketClient] = None
         if self.canton_enabled:
-            self.ws_client = FacilitatorWebSocketClient(self.canton_facilitator_url)
+            self.ws_client = FacilitatorWebSocketClient(
+                self.canton_facilitator_url,
+                api_key=self.canton_facilitator_api_key,
+            )
         
         # Combined payment enabled flag (either USDC or Canton)
         self.any_payment_enabled = self.enabled or self.canton_enabled
@@ -191,6 +195,13 @@ class PaymentHandler:
             self._validate_canton_configuration()
             logger.info(f"🔐 Canton payment enabled (network: {self.canton_network})")
             logger.info(f"💰 Canton payee party: {self.canton_payee_party}")
+
+    def _facilitator_headers(self) -> dict:
+        """Build HTTP headers for facilitator API calls, including auth if configured."""
+        headers = {"Content-Type": "application/json"}
+        if self.canton_facilitator_api_key:
+            headers["Authorization"] = f"Bearer {self.canton_facilitator_api_key}"
+        return headers
 
     def _validate_configuration(self):
         """Validate required x402 configuration"""
@@ -315,6 +326,7 @@ class PaymentHandler:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
                     f"{self.canton_facilitator_url}/payment-object",
+                    headers=self._facilitator_headers(),
                     json={
                         "amount": amount,
                         "merchantParty": self.canton_payee_party,
@@ -551,6 +563,7 @@ class PaymentHandler:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.get(
                     f"{self.canton_facilitator_url}/check-payment-status",
+                    headers=self._facilitator_headers(),
                     params={
                         "party": party_id,
                         "payee": self.canton_payee_party,
@@ -713,10 +726,11 @@ class PaymentHandler:
                 # Canton payments don't follow EVM PaymentPayload structure
                 response = await client.post(
                     f"{self.canton_facilitator_url}/verify",
+                    headers=self._facilitator_headers(),
                     json={
-                        "paymentPayload": payment_dict,  # Use raw dict, not model_dump()
-                        "paymentRequirements": selected_req  # Already a dict
-                    }
+                        "paymentPayload": payment_dict,
+                        "paymentRequirements": selected_req,
+                    },
                 )
                 
                 if response.status_code != 200:

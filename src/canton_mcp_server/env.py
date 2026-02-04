@@ -71,6 +71,9 @@ ENV_VALUES["CANTON_NETWORK"] = os.getenv("CANTON_NETWORK", "canton-local")
 # Internal API Key for payment bypass (cron jobs, internal services)
 ENV_VALUES["X402_INTERNAL_API_KEY"] = os.getenv("X402_INTERNAL_API_KEY", "")
 
+# Canton Facilitator API Key (for authenticated facilitator endpoints)
+ENV_VALUES["CANTON_FACILITATOR_API_KEY"] = os.getenv("CANTON_FACILITATOR_API_KEY", "")
+
 # Pricing Configuration
 ENV_VALUES["X402_PRICING_MODE"] = os.getenv("X402_PRICING_MODE", "dynamic")
 ENV_VALUES["X402_MIN_PAYMENT"] = os.getenv("X402_MIN_PAYMENT", "0.001")

@@ -26,15 +26,17 @@ MAX_RECONNECT_DELAY = 60  # seconds
 class FacilitatorWebSocketClient:
     """WebSocket client for facilitator communication"""
 
-    def __init__(self, facilitator_url: str):
+    def __init__(self, facilitator_url: str, api_key: str = ""):
         """
         Initialize WebSocket client.
 
         Args:
             facilitator_url: Base URL of facilitator (e.g., http://localhost:3000)
+            api_key: Optional API key for authenticated facilitator endpoints
         """
         # Store both HTTP and WebSocket URLs to avoid repeated conversion
         self.facilitator_url = facilitator_url
+        self.api_key = api_key
         ws_url = facilitator_url.replace("http://", "ws://").replace("https://", "wss://")
         self.ws_url = f"{ws_url}/ws"
         self.websocket: Optional[websockets.WebSocketClientProtocol] = None
@@ -46,10 +48,14 @@ class FacilitatorWebSocketClient:
         """Connect to facilitator WebSocket server"""
         try:
             logger.info(f"🔌 Connecting to facilitator WebSocket: {self.ws_url}")
+            extra_headers = {}
+            if self.api_key:
+                extra_headers["Authorization"] = f"Bearer {self.api_key}"
             self.websocket = await websockets.connect(
                 self.ws_url,
                 ping_interval=20,
                 ping_timeout=10,
+                additional_headers=extra_headers,
             )
             self.connected = True
             logger.info("✅ Connected to facilitator WebSocket")
@@ -153,9 +159,13 @@ class FacilitatorWebSocketClient:
         
         # Fallback to HTTP query if not cached
         try:
+            headers = {}
+            if self.api_key:
+                headers["Authorization"] = f"Bearer {self.api_key}"
             async with httpx.AsyncClient(timeout=5.0) as client:
                 response = await client.get(
                     f"{self.facilitator_url}/balance",
+                    headers=headers,
                     params={"party": party},
                 )
                 if response.status_code == 200:

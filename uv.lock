@@ -411,6 +411,7 @@ dependencies = [
     { name = "pyyaml" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "watchdog" },
+    { name = "websockets" },
     { name = "x402" },
 ]
 
@@ -433,6 +434,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.27.0" },
     { name = "watchdog", specifier = ">=4.0.0" },
+    { name = "websockets", specifier = ">=12.0" },
     { name = "x402", specifier = ">=0.1.0" },
 ]
 
