@@ -524,19 +524,17 @@ class PaymentHandler:
         if not self.canton_enabled:
             return True  # Skip check if Canton not enabled
 
-        # Extract party ID (from header, URL query param, or default)
+        # Extract party ID (from header or URL query param)
+        # NOTE: No default fallback - party ID is required at the server.py level
         party_id = request.headers.get("X-Canton-Party-ID", "")
         if not party_id:
             party_id = request.query_params.get("payerParty", "")
-        if not party_id:
-            from canton_mcp_server.env import get_env
-            party_id = get_env("CANTON_DEFAULT_PAYER_PARTY", "")
 
         if not party_id:
-            logger.warning(
+            # Should never reach here - server.py validates party_id first
+            logger.error(
                 f"⚠️  No party ID found for payment check (tool: {tool_name}). "
-                "Payment check will fail. "
-                "Set CANTON_DEFAULT_PAYER_PARTY env var or include payerParty in URL query params."
+                "This should have been caught earlier. Payment check fails."
             )
             return False
 
