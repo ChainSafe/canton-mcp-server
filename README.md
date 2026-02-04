@@ -44,7 +44,7 @@ Add to `.cursor/mcp.json`:
   "mcpServers": {
     "canton-mcp": {
       "type": "sse",
-      "url": "http://91.99.186.83:7284/mcp",
+      "url": "http://<you-server-ip-or.domain>:7284/mcp",
       "headers": {
         "X-Canton-Party-ID": "your-party::1220abc..."
       }

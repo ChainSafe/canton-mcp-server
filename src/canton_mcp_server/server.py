@@ -239,6 +239,7 @@ async def handle_tool_call_request(mcp_request: JSONRPCRequest, request: Request
     # =============================================================================
     # Require X-Canton-Party-ID header - no defaults, no fallbacks
     # This prevents free access and ensures payment accountability
+    party_id = ""
     if payment_handler.canton_enabled:
         party_id = request.headers.get("X-Canton-Party-ID", "")
         if not party_id:
@@ -417,34 +418,22 @@ async def handle_tool_call_request(mcp_request: JSONRPCRequest, request: Request
         logger.debug(f"Progress token: {progress_token}")
         
         # Broadcast payment-required after response is generated (optimistic mode)
-        # Simplified: Always broadcast if Canton enabled, use default party
-        if payment_handler.canton_enabled and payment_handler.ws_client:
-            from canton_mcp_server.env import get_env
-            party_id = (
-                request.headers.get("X-Canton-Party-ID") or
-                request.query_params.get("payerParty") or
-                get_env("CANTON_DEFAULT_PAYER_PARTY", "")
-            )
-            
-            if party_id:
-                price_usd = payment_handler.get_tool_price(tool_name, arguments)
-                if price_usd > 0.0:  # Only broadcast for paid tools
-                    resource_url = str(request.url)
-                    payee = payment_handler.canton_payee_party
-                    
-                    # Broadcast asynchronously (fire and forget)
-                    asyncio.create_task(
-                        payment_handler.ws_client.broadcast_payment_required(
-                            party=party_id,
-                            payee=payee,
-                            amount=price_usd,
-                            resource=resource_url,
-                            tool=tool_name,
-                        )
+        # Reuse party_id from security gate (no env fallback)
+        if payment_handler.canton_enabled and payment_handler.ws_client and party_id:
+            price_usd = payment_handler.get_tool_price(tool_name, arguments)
+            if price_usd > 0.0:  # Only broadcast for paid tools
+                resource_url = str(request.url)
+                payee = payment_handler.canton_payee_party
+                asyncio.create_task(
+                    payment_handler.ws_client.broadcast_payment_required(
+                        party=party_id,
+                        payee=payee,
+                        amount=price_usd,
+                        resource=resource_url,
+                        tool=tool_name,
                     )
-                    logger.info(f"📤 Broadcasted payment-required: {tool_name} - ${price_usd} from {party_id}")
-            else:
-                logger.warning(f"⚠️  No party_id found for payment broadcast (tool: {tool_name})")
+                )
+                logger.info(f"📤 Broadcasted payment-required: {tool_name} - ${price_usd} from {party_id}")
         
         return StreamingResponse(
             create_sse_stream(tool_generator),
@@ -461,32 +450,22 @@ async def handle_tool_call_request(mcp_request: JSONRPCRequest, request: Request
     final_response = await collect_final_result(tool_generator)
     if final_response:
         # Broadcast payment-required after response is generated (optimistic mode)
-        # For Canton payments, broadcast via WebSocket after successful tool execution
-        if payment_handler.canton_enabled and payment_handler.ws_client:
-            party_id = request.headers.get("X-Canton-Party-ID", "")
-            if not party_id:
-                party_id = request.query_params.get("payerParty", "")
-            if not party_id:
-                from canton_mcp_server.env import get_env
-                party_id = get_env("CANTON_DEFAULT_PAYER_PARTY", "")
-            
-            if party_id:
-                price_usd = payment_handler.get_tool_price(tool_name, arguments)
-                if price_usd > 0.0:  # Only broadcast for paid tools
-                    resource_url = str(request.url)
-                    payee = payment_handler.canton_payee_party
-                    
-                    # Broadcast asynchronously (fire and forget)
-                    asyncio.create_task(
-                        payment_handler.ws_client.broadcast_payment_required(
-                            party=party_id,
-                            payee=payee,
-                            amount=price_usd,
-                            resource=resource_url,
-                            tool=tool_name,
-                        )
+        # Reuse party_id from security gate (no env fallback)
+        if payment_handler.canton_enabled and payment_handler.ws_client and party_id:
+            price_usd = payment_handler.get_tool_price(tool_name, arguments)
+            if price_usd > 0.0:  # Only broadcast for paid tools
+                resource_url = str(request.url)
+                payee = payment_handler.canton_payee_party
+                asyncio.create_task(
+                    payment_handler.ws_client.broadcast_payment_required(
+                        party=party_id,
+                        payee=payee,
+                        amount=price_usd,
+                        resource=resource_url,
+                        tool=tool_name,
                     )
-                    logger.debug(f"📤 Broadcasted payment-required for '{tool_name}' (non-streaming mode)")
+                )
+                logger.debug(f"📤 Broadcasted payment-required for '{tool_name}' (non-streaming mode)")
         
         return JSONResponse(content=final_response.to_camel_dict())
 
