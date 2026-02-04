@@ -1,0 +1,42 @@
+COST RECOVERY AND SERVICE TERMS
+
+1. DEFINITIONS
+   "Server Fees" means charges to recover operational costs including 
+   but not limited to: third-party API calls (e.g., Anthropic), 
+   cloud infrastructure, and blockchain network transaction fees.
+   
+   "Code Analysis Service" means the AI-assisted DAML code generation 
+   functionality provided through this platform.
+
+2. FEE STRUCTURE
+   (a) Server Fees are charged solely to recover the cost of 
+       infrastructure and third-party services required to operate 
+       the platform.
+   (b) Server Fees do NOT constitute payment for the Code Analysis 
+       Service itself.
+   (c) The Code Analysis Service is provided FREE OF CHARGE.
+
+3. FREE SERVICE DISCLAIMER
+   AS THE CODE ANALYSIS SERVICE IS PROVIDED FREE OF CHARGE:
+   (a) It is provided "AS-IS" without any warranty whatsoever
+   (b) ChainSafe Systems Inc. makes no representations regarding accuracy, 
+       reliability, completeness, or fitness for any purpose
+   (c) ChainSafe Systems Inc. assumes no liability for any use of generated code
+   (d) ChainSafe Systems Inc. may modify, suspend, or terminate the service 
+       at any time without notice
+
+4. SERVER FEES TERMS
+   (a) Server Fees are non-refundable
+   (b) ChainSafe Systems Inc.'s only obligation regarding Server Fees is to 
+       make reasonable efforts to process requests through the 
+       underlying infrastructure
+   (c) Server Fees do not guarantee availability, uptime, or 
+       successful completion of any request
+
+5. EXPLICIT ACKNOWLEDGMENT
+   By using this platform, User explicitly acknowledges and agrees:
+   (a) User is paying ONLY for infrastructure cost recovery
+   (b) User is NOT paying for code quality, accuracy, or reliability
+   (c) The Code Analysis Service would be provided identically 
+       if Server Fees were zero
+   (d) All generated code must be independently reviewed

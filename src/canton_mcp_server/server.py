@@ -13,10 +13,11 @@ import json
 import logging
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 
 from canton_mcp_server import tools  # noqa: F401
 from canton_mcp_server.core import get_registry
@@ -219,6 +220,7 @@ async def handle_tool_call_request(mcp_request: JSONRPCRequest, request: Request
     Handle tools/call with payment status check.
 
     Payment flow:
+    - PHASE -1: Require party ID (security gate)
     - PHASE 0: Check balance threshold (for Canton) - blocks if >= $2.00
     - PHASE 1: Check payment status (if enabled) - for Canton, optimistic mode
     - PHASE 2: Execute tool (in tool_handler)
@@ -233,18 +235,31 @@ async def handle_tool_call_request(mcp_request: JSONRPCRequest, request: Request
         return error_response(mcp_request.id, ErrorCodes.INVALID_PARAMS, "Missing tool name")
 
     # =============================================================================
+    # Party ID Requirement (PHASE -1: Security Gate - Always Required)
+    # =============================================================================
+    # Require X-Canton-Party-ID header - no defaults, no fallbacks
+    # This prevents free access and ensures payment accountability
+    if payment_handler.canton_enabled:
+        party_id = request.headers.get("X-Canton-Party-ID", "")
+        if not party_id:
+            # Try query param as fallback (for URL-based clients)
+            party_id = request.query_params.get("payerParty", "")
+        
+        if not party_id:
+            # No party ID provided - reject request immediately
+            return error_response(
+                mcp_request.id,
+                ErrorCodes.INVALID_REQUEST,
+                "X-Canton-Party-ID header required. Provide your Canton party ID to use this service.",
+            )
+
+    # =============================================================================
     # Balance Threshold Check (PHASE 0: Fast Non-blocking Gate Check for Canton)
     # =============================================================================
     # Check balance with very short timeout - if it fails/hangs, serve optimistically
     # Only block if we successfully get balance >= $2.00 within 0.5 seconds
     if payment_handler.canton_enabled and payment_handler.ws_client:
-        # Extract party ID
-        party_id = request.headers.get("X-Canton-Party-ID", "")
-        if not party_id:
-            party_id = request.query_params.get("payerParty", "")
-        if not party_id:
-            from canton_mcp_server.env import get_env
-            party_id = get_env("CANTON_DEFAULT_PAYER_PARTY", "")
+        # Use party_id extracted above (already validated)
         
         if party_id:
             try:
@@ -296,13 +311,8 @@ async def handle_tool_call_request(mcp_request: JSONRPCRequest, request: Request
             # For Canton payments, return standard MCP error (not 402)
             if payment_handler.canton_enabled:
                 # Register pending payment with facilitator (async, non-blocking)
+                # party_id already validated at start of function
                 try:
-                    party_id = request.headers.get("X-Canton-Party-ID", "")
-                    if not party_id:
-                        party_id = request.query_params.get("payerParty", "")
-                    if not party_id:
-                        from canton_mcp_server.env import get_env
-                        party_id = get_env("CANTON_DEFAULT_PAYER_PARTY", "")
                     
                     logger.info(f"🔍 Payment registration check: party_id={'SET' if party_id else 'MISSING'}, has_requirements={bool(e.payment_requirements)}")
                     
@@ -407,14 +417,14 @@ async def handle_tool_call_request(mcp_request: JSONRPCRequest, request: Request
         logger.debug(f"Progress token: {progress_token}")
         
         # Broadcast payment-required after response is generated (optimistic mode)
-        # For Canton payments, broadcast via WebSocket after tool execution starts
+        # Simplified: Always broadcast if Canton enabled, use default party
         if payment_handler.canton_enabled and payment_handler.ws_client:
-            party_id = request.headers.get("X-Canton-Party-ID", "")
-            if not party_id:
-                party_id = request.query_params.get("payerParty", "")
-            if not party_id:
-                from canton_mcp_server.env import get_env
-                party_id = get_env("CANTON_DEFAULT_PAYER_PARTY", "")
+            from canton_mcp_server.env import get_env
+            party_id = (
+                request.headers.get("X-Canton-Party-ID") or
+                request.query_params.get("payerParty") or
+                get_env("CANTON_DEFAULT_PAYER_PARTY", "")
+            )
             
             if party_id:
                 price_usd = payment_handler.get_tool_price(tool_name, arguments)
@@ -432,7 +442,9 @@ async def handle_tool_call_request(mcp_request: JSONRPCRequest, request: Request
                             tool=tool_name,
                         )
                     )
-                    logger.debug(f"📤 Broadcasted payment-required for '{tool_name}' (streaming mode)")
+                    logger.info(f"📤 Broadcasted payment-required: {tool_name} - ${price_usd} from {party_id}")
+            else:
+                logger.warning(f"⚠️  No party_id found for payment broadcast (tool: {tool_name})")
         
         return StreamingResponse(
             create_sse_stream(tool_generator),
@@ -643,10 +655,23 @@ async def root():
         "version": "0.1.0",
         "mcp_endpoint": "/mcp",
         "health_endpoint": "/health",
+        "terms_endpoint": "/terms",
         "transport": "streamable-http",
         "streaming_format": "sse",
         "description": "MCP server for Canton blockchain development with DAML validation",
     }
+
+
+@app.get("/terms", response_class=PlainTextResponse)
+async def terms_of_service():
+    """Public plain-text Terms of Service for this MCP server."""
+    path = Path(__file__).parent / "terms_of_service.txt"
+    if not path.exists():
+        return PlainTextResponse(
+            "Terms of service not available.",
+            status_code=404,
+        )
+    return PlainTextResponse(path.read_text(encoding="utf-8"))
 
 
 # =============================================================================
