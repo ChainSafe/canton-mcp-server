@@ -5,6 +5,20 @@ Canton MCP Server - Model Context Protocol Implementation
 Clean, framework-driven server with automatic tool registration,
 payment integration (disabled by default), DCAP performance tracking,
 and streaming support.
+
+## AUTHENTICATION ##
+Uses cryptographic challenge-response with Ed25519 signatures.
+
+Flow:
+1. POST /auth/challenge {partyId, publicKey?} → {challenge, expiresIn}
+2. Client signs challenge with private key
+3. POST /auth/verify {partyId, challenge, signature} → {token}
+4. POST /mcp with Authorization: Bearer <token>
+
+See:
+- /home/skynet/.claude/skills/canton-mcp-auth.md (complete guide)
+- /home/skynet/canton/CHALLENGE_AUTH_SETUP.md (setup instructions)
+- canton_mcp_server/auth.py (implementation)
 """
 
 import asyncio
@@ -49,7 +63,17 @@ from canton_mcp_server.payment_handler import (
     PaymentSettlementError,
     PaymentVerificationError,
 )
+from canton_mcp_server.env import get_env
 from canton_mcp_server.utils.conversion import convert_keys_to_snake_case
+from canton_mcp_server.auth import (
+    verify_canton_transaction,
+    generate_jwt_token,
+    verify_jwt_token,
+    extract_party_from_jwt,
+    generate_challenge,
+    verify_challenge_signature,
+    AuthError,
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(levelname)-5s | %(message)s")
@@ -235,24 +259,11 @@ async def handle_tool_call_request(mcp_request: JSONRPCRequest, request: Request
         return error_response(mcp_request.id, ErrorCodes.INVALID_PARAMS, "Missing tool name")
 
     # =============================================================================
-    # Party ID Requirement (PHASE -1: Security Gate - Always Required)
+    # Get Authenticated Party (Already validated at main endpoint level)
     # =============================================================================
-    # Require X-Canton-Party-ID header - no defaults, no fallbacks
-    # This prevents free access and ensures payment accountability
-    party_id = ""
-    if payment_handler.canton_enabled:
-        party_id = request.headers.get("X-Canton-Party-ID", "")
-        if not party_id:
-            # Try query param as fallback (for URL-based clients)
-            party_id = request.query_params.get("payerParty", "")
-        
-        if not party_id:
-            # No party ID provided - reject request immediately
-            return error_response(
-                mcp_request.id,
-                ErrorCodes.INVALID_REQUEST,
-                "X-Canton-Party-ID header required. Provide your Canton party ID to use this service.",
-            )
+    # Party ID was extracted and validated in handle_mcp_request
+    # Query parameter payerParty was already checked to match authenticated party
+    party_id = getattr(request.state, "authenticated_party", "")
 
     # =============================================================================
     # Balance Threshold Check (PHASE 0: Fast Non-blocking Gate Check for Canton)
@@ -269,16 +280,47 @@ async def handle_tool_call_request(mcp_request: JSONRPCRequest, request: Request
                     payment_handler.ws_client.check_balance(party_id),
                     timeout=0.5  # 500ms max - if it takes longer, serve optimistically
                 )
+                logger.info(f"💰 Balance check result: ${balance:.2f} for {party_id}")
                 if balance >= 2.0:
                     # Balance threshold exceeded - deny access with detailed message
+                    billing_portal_url = get_env("BILLING_PORTAL_URL", "http://localhost:3050")
+                    payee_party = "app_provider_quickstart-skynet-1::1220de769fb9fa9505bb61fc6fc1e30507829f8179e140645f40e222bc7bcdac21d7"
+                    logger.warning(f"🚫 Access denied for {party_id}: balance ${balance:.2f} >= $2.00")
+
+                    # Direct users to billing portal for self-service payment
+                    error_msg = f"""Payment required: Your balance is ${balance:.2f}.
+
+Visit the billing portal to send payment:
+{billing_portal_url}/topup-public?party={party_id}
+
+⚠️  IMPORTANT: You'll need your Canton key file during payment.
+   Location: ~/.canton/<party-name>-key.json
+
+   Don't have one? The billing portal provides setup instructions.
+
+You need to send approximately 5 Canton Coins to continue.
+
+The portal will guide you through:
+1. Key file verification (or creation instructions)
+2. TransferPreapproval setup (first time only)
+3. Payment transaction signing
+4. Automatic balance detection (no restart needed)
+
+Return to Cursor after ~1 minute and your tools will work again.
+"""
+
                     return error_response(
                         mcp_request.id,
                         ErrorCodes.INVALID_REQUEST,
-                        f"Access denied: You owe ${balance:.2f}. Please pay your balance before continuing.",
+                        error_msg,
                     )
-            except (asyncio.TimeoutError, Exception):
-                # Any error or timeout - serve optimistically (don't log, too noisy)
-                # Balance check failed/hung - continue with optimistic serving
+                else:
+                    logger.info(f"✅ Balance check passed: ${balance:.2f} < $2.00")
+            except asyncio.TimeoutError:
+                logger.warning(f"⏱️  Balance check timed out after 0.5s for {party_id} - serving optimistically")
+                pass
+            except Exception as e:
+                logger.warning(f"❌ Balance check failed for {party_id}: {e} - serving optimistically")
                 pass
 
     # =============================================================================
@@ -527,6 +569,55 @@ async def handle_mcp_request(request: Request):
         )
         logger.log(log_level, f"MCP request: {mcp_request.method}")
 
+        # =============================================================================
+        # JWT Authentication & Party Validation (Applies to all authenticated methods)
+        # =============================================================================
+        # Methods that bypass authentication (public protocol methods)
+        PUBLIC_METHODS = {"initialize", "notifications/initialized", "ping"}
+
+        # If Canton payment is enabled and this isn't a public method, require auth
+        if payment_handler.canton_enabled and mcp_request.method not in PUBLIC_METHODS:
+            auth_header = request.headers.get("Authorization")
+
+            if not auth_header or not auth_header.startswith("Bearer "):
+                return error_response(
+                    mcp_request.id,
+                    ErrorCodes.INVALID_REQUEST,
+                    "Missing Authorization header. Authenticate at POST /auth/verify with challenge-response.",
+                )
+
+            token = auth_header.replace("Bearer ", "")
+
+            try:
+                claims = verify_jwt_token(token)
+                party_id = claims["sub"]
+                logger.info(f"🔐 Authenticated request from party: {party_id}")
+
+                # SECURITY: Validate that payerParty parameter matches authenticated party
+                # This prevents authenticated user from billing a different party's account
+                query_party_id = request.query_params.get("payerParty", "")
+                if query_party_id and query_party_id != party_id:
+                    logger.error(
+                        f"🚨 SECURITY: Party ID mismatch! "
+                        f"Authenticated as '{party_id}' but trying to bill '{query_party_id}'"
+                    )
+                    return error_response(
+                        mcp_request.id,
+                        ErrorCodes.INVALID_REQUEST,
+                        f"Security violation: payerParty parameter ({query_party_id}) must match authenticated party ({party_id})",
+                    )
+
+                # Store authenticated party in request state for payment_handler to use
+                # This ensures payment_handler always uses the authenticated party
+                request.state.authenticated_party = party_id
+
+            except AuthError as e:
+                return error_response(
+                    mcp_request.id,
+                    ErrorCodes.INVALID_REQUEST,
+                    f"Authentication failed: {str(e)}",
+                )
+
         # Route to appropriate handler
         method = mcp_request.method
         params = mcp_request.params or {}
@@ -624,6 +715,181 @@ async def health_check():
         "status": "healthy",
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
+
+
+@app.post("/auth/challenge")
+async def request_auth_challenge(request: Request):
+    """
+    Request an authentication challenge (RECOMMENDED METHOD).
+
+    Request: {
+        "partyId": "alice::1220...",
+        "publicKey": "base64-encoded-public-key" (optional, required for first auth)
+    }
+    Response: {
+        "challenge": "base64-encoded-nonce",
+        "expiresIn": 300,
+        "requiresPublicKey": false
+    }
+    """
+    try:
+        body = await request.json()
+        party_id = body.get("partyId")
+        public_key = body.get("publicKey")
+
+        if not party_id:
+            return JSONResponse(
+                status_code=400, content={"error": "partyId is required"}
+            )
+
+        # Import public key store check
+        from canton_mcp_server.auth import _public_key_store
+
+        # Check if we have a public key for this party
+        has_public_key = party_id in _public_key_store
+
+        if not has_public_key and not public_key:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "Public key required for first-time authentication",
+                    "requiresPublicKey": True,
+                    "message": "Provide your public key in the 'publicKey' field (base64-encoded)",
+                },
+            )
+
+        try:
+            challenge = generate_challenge(party_id, public_key)
+
+            return JSONResponse(
+                content={
+                    "challenge": challenge,
+                    "expiresIn": 300,
+                    "requiresPublicKey": False,
+                    "message": "Sign this challenge with your Canton party's private key",
+                }
+            )
+        except AuthError as e:
+            return JSONResponse(status_code=400, content={"error": str(e)})
+
+    except Exception as e:
+        logger.error(f"Challenge generation error: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.post("/auth/verify")
+async def verify_auth_signature(request: Request):
+    """
+    Verify signed challenge and issue JWT token (RECOMMENDED METHOD).
+
+    Request: {
+        "partyId": "alice::1220...",
+        "challenge": "base64-challenge",
+        "signature": "base64-signature"
+    }
+    Response: {
+        "token": "eyJhbGc..."
+    }
+    """
+    try:
+        body = await request.json()
+        party_id = body.get("partyId")
+        challenge = body.get("challenge")
+        signature = body.get("signature")
+
+        if not all([party_id, challenge, signature]):
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "partyId, challenge, and signature are required"
+                },
+            )
+
+        # Verify signature
+        try:
+            await verify_challenge_signature(party_id, challenge, signature)
+        except AuthError as e:
+            return JSONResponse(
+                status_code=401,
+                content={"error": f"Authentication failed: {str(e)}"},
+            )
+
+        # Generate JWT token
+        token = generate_jwt_token(party_id, f"challenge-{challenge[:16]}")
+
+        logger.info(
+            f"✅ Authentication successful for {party_id} via signature verification"
+        )
+
+        return JSONResponse(content={"token": token})
+
+    except Exception as e:
+        logger.error(f"Authentication error: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.post("/auth/verify-payment")
+async def authenticate_with_payment(request: Request):
+    """
+    Authenticate using a Canton transaction ID (DEPRECATED).
+
+    ⚠️  DEPRECATED: Use /auth/challenge + /auth/verify instead.
+    This method is insecure as transaction IDs are public on the ledger.
+
+    Request: {
+        "transactionId": "canton-transaction-id",
+        "partyId": "user::1220..."
+    }
+    Response: {
+        "token": "eyJhbGc...",
+        "warning": "This authentication method is deprecated..."
+    }
+    """
+    try:
+        body = await request.json()
+        transaction_id = body.get("transactionId")
+        party_id = body.get("partyId")
+
+        if not transaction_id or not party_id:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "transactionId and partyId are required"},
+            )
+
+        # Verify transaction exists on Canton ledger and was signed by party
+        facilitator_url = get_env(
+            "CANTON_FACILITATOR_URL", "http://localhost:3001"
+        )
+
+        try:
+            await verify_canton_transaction(
+                transaction_id, party_id, facilitator_url
+            )
+        except AuthError as e:
+            return JSONResponse(
+                status_code=401,
+                content={"error": f"Authentication failed: {str(e)}"},
+            )
+
+        # Generate JWT token
+        token = generate_jwt_token(party_id, f"transaction-{transaction_id}")
+
+        logger.warning(
+            f"⚠️  DEPRECATED: Transaction-based auth used for {party_id}. "
+            "Recommend using /auth/challenge + /auth/verify instead."
+        )
+
+        return JSONResponse(
+            content={
+                "token": token,
+                "warning": "This authentication method is deprecated and will be removed. "
+                "Please migrate to /auth/challenge + /auth/verify for secure authentication.",
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Authentication error: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 
 @app.get("/")
