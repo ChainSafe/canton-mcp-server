@@ -946,7 +946,7 @@ async def test_connection() -> dict:
         Dict with connection status
     """
     try:
-        token = await get_oauth_token()
+        await get_oauth_token()  # Verify OAuth credentials work
 
         # Test connectivity by getting ledger offset
         offset = await get_ledger_offset()

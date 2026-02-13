@@ -70,7 +70,6 @@ from canton_mcp_server.auth import (
     verify_canton_transaction,
     generate_jwt_token,
     verify_jwt_token,
-    extract_party_from_jwt,
     generate_challenge,
     verify_challenge_signature,
     AuthError,
@@ -1059,7 +1058,7 @@ async def create_billing_credit(request: Request):
             user_party=user_party,
             amount=float(amount),
             transfer_id=transfer_id,
-            description=description or f"Top-up via billing portal",
+            description=description or "Top-up via billing portal",
         )
 
         # Get updated balance

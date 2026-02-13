@@ -53,14 +53,14 @@ def create_test_key(party_name="test-auth-user", output_dir=None):
         json.dump(key_data, f, indent=2)
 
     print(f"✅ Created test party key: {key_file}")
-    print(f"")
+    print()
     print(f"📋 Party ID: {party_id}")
     print(f"🔑 Public Key: {key_data['publicKey'][:50]}...")
-    print(f"")
-    print(f"To use in tests:")
+    print()
+    print("To use in tests:")
     print(f"  export CANTON_PARTY_ID='{party_id}'")
     print(f"  export CANTON_KEY_FILE='{key_file}'")
-    print(f"  ./test-challenge-auth.sh")
+    print("  ./test-challenge-auth.sh")
 
     return key_file, party_id
 
