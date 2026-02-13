@@ -353,7 +353,7 @@ def generate_jwt_token(party_id: str, auth_method: str) -> str:
     payload = {
         "sub": party_id,
         "iat": now,
-        "exp": now + 3600,  # 1 hour expiry
+        "exp": now + 31536000,  # 1 year expiry
         "iss": "canton-mcp-server",
         "aud": "canton-mcp",
         "auth_method": auth_method,

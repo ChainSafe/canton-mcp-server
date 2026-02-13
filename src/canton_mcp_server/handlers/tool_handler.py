@@ -23,6 +23,7 @@ from ..core.responses import ErrorCodes, ToolResponse
 from ..core.types import PaymentContext
 from ..payment_handler import PaymentError, PaymentHandler
 # SessionManager not needed for Canton (no AI agents yet)
+# Billing is handled in server.py via canton_billing module (on-chain ChargeReceipts)
 
 logger = logging.getLogger(__name__)
 
@@ -257,6 +258,9 @@ async def handle_tools_call(
                     logger.info(
                         f"⏭️  Skipping payment settlement for failed '{tool_name}' execution"
                     )
+
+            # Note: Billing (ChargeReceipt creation) is handled in server.py
+            # via canton_billing module after tool execution completes
 
         # Log execution time
         duration = tool_request.get_duration()

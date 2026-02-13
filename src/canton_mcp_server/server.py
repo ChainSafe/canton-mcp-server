@@ -28,6 +28,7 @@ import logging
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -73,6 +74,13 @@ from canton_mcp_server.auth import (
     generate_challenge,
     verify_challenge_signature,
     AuthError,
+)
+from canton_mcp_server.canton_billing import (
+    get_balance as get_chain_balance,
+    create_charge_receipt,
+    create_credit_receipt,
+    verify_transfer_on_chain,
+    CantonBillingError,
 )
 
 # Configure logging
@@ -266,62 +274,62 @@ async def handle_tool_call_request(mcp_request: JSONRPCRequest, request: Request
     party_id = getattr(request.state, "authenticated_party", "")
 
     # =============================================================================
-    # Balance Threshold Check (PHASE 0: Fast Non-blocking Gate Check for Canton)
+    # Balance Threshold Check (PHASE 0: On-Chain Balance Check)
     # =============================================================================
-    # Check balance with very short timeout - if it fails/hangs, serve optimistically
-    # Only block if we successfully get balance >= $2.00 within 0.5 seconds
-    if payment_handler.canton_enabled and payment_handler.ws_client:
-        # Use party_id extracted above (already validated)
-        
-        if party_id:
-            try:
-                # Very fast balance check - 0.5 second max, then give up
-                balance = await asyncio.wait_for(
-                    payment_handler.ws_client.check_balance(party_id),
-                    timeout=0.5  # 500ms max - if it takes longer, serve optimistically
+    # Check balance from Canton ledger (queries ChargeReceipt + CreditReceipt contracts)
+    # Block if balance is negative (user owes money)
+    if payment_handler.canton_enabled and party_id:
+        try:
+            billing = await get_chain_balance(party_id)
+            balance = billing.balance  # credits - charges
+
+            logger.info(f"💰 On-chain balance: {balance:.2f} CC (credited: {billing.total_credited:.2f}, charged: {billing.total_charged:.2f}) for {party_id}")
+
+            # Block if balance is negative (user owes money)
+            # Allow a small threshold before blocking (configurable, default -2.0 CC)
+            min_balance = float(get_env("MIN_BALANCE_THRESHOLD", "-2.0"))
+            if balance < min_balance:
+                # Balance too low - deny access with detailed message
+                billing_portal_url = get_env("BILLING_PORTAL_URL", "http://localhost:3050")
+                provider_wallet = get_env(
+                    "CANTON_PAYEE_PARTY",
+                    "app_provider_quickstart-skynet-1::1220de769fb9fa9505bb61fc6fc1e30507829f8179e140645f40e222bc7bcdac21d7"
                 )
-                logger.info(f"💰 Balance check result: ${balance:.2f} for {party_id}")
-                if balance >= 2.0:
-                    # Balance threshold exceeded - deny access with detailed message
-                    billing_portal_url = get_env("BILLING_PORTAL_URL", "http://localhost:3050")
-                    payee_party = "app_provider_quickstart-skynet-1::1220de769fb9fa9505bb61fc6fc1e30507829f8179e140645f40e222bc7bcdac21d7"
-                    logger.warning(f"🚫 Access denied for {party_id}: balance ${balance:.2f} >= $2.00")
+                owed = abs(balance) if balance < 0 else 0
+                logger.warning(f"🚫 Access denied for {party_id}: balance {balance:.2f} CC < minimum {min_balance:.2f} CC")
 
-                    # Direct users to billing portal for self-service payment
-                    error_msg = f"""Payment required: Your balance is ${balance:.2f}.
+                # Direct users to billing portal for self-service payment
+                error_msg = f"""Payment required: Your balance is {balance:.2f} CC (you owe {owed:.2f} CC).
 
-Visit the billing portal to send payment:
-{billing_portal_url}/topup-public?party={party_id}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TOP UP YOUR ACCOUNT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+→ {billing_portal_url}/topup?party={quote(party_id, safe='')}
 
-⚠️  IMPORTANT: You'll need your Canton key file during payment.
-   Location: ~/.canton/<party-name>-key.json
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+OR TRANSFER CC DIRECTLY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Send Canton Coins to:
+{provider_wallet}
 
-   Don't have one? The billing portal provides setup instructions.
+Recommended amount: 5 CC
 
-You need to send approximately 5 Canton Coins to continue.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-The portal will guide you through:
-1. Key file verification (or creation instructions)
-2. TransferPreapproval setup (first time only)
-3. Payment transaction signing
-4. Automatic balance detection (no restart needed)
-
-Return to Cursor after ~1 minute and your tools will work again.
+After top-up, return to Cursor and your tools will work again.
 """
 
-                    return error_response(
-                        mcp_request.id,
-                        ErrorCodes.INVALID_REQUEST,
-                        error_msg,
-                    )
-                else:
-                    logger.info(f"✅ Balance check passed: ${balance:.2f} < $2.00")
-            except asyncio.TimeoutError:
-                logger.warning(f"⏱️  Balance check timed out after 0.5s for {party_id} - serving optimistically")
-                pass
-            except Exception as e:
-                logger.warning(f"❌ Balance check failed for {party_id}: {e} - serving optimistically")
-                pass
+                return error_response(
+                    mcp_request.id,
+                    ErrorCodes.INVALID_REQUEST,
+                    error_msg,
+                )
+            else:
+                logger.info(f"✅ Balance check passed: {balance:.2f} CC >= {min_balance:.2f} CC minimum")
+        except CantonBillingError as e:
+            logger.warning(f"❌ On-chain balance check failed for {party_id}: {e} - serving optimistically")
+        except Exception as e:
+            logger.warning(f"❌ Balance check error for {party_id}: {e} - serving optimistically")
 
     # =============================================================================
     # Payment Verification (PHASE 1: Check Status)
@@ -458,7 +466,27 @@ Return to Cursor after ~1 minute and your tools will work again.
     # Streaming mode: return SSE stream
     if progress_token is not None:
         logger.debug(f"Progress token: {progress_token}")
-        
+
+        # Create ChargeReceipt on-chain for streaming mode
+        # (recorded immediately since streaming starts now)
+        if payment_handler.canton_enabled and party_id:
+            try:
+                price_cc = payment_handler.get_tool_price(tool_name, arguments)
+                if price_cc > 0.0:  # Only charge for paid tools
+                    # Create ChargeReceipt on Canton ledger (fire-and-forget)
+                    asyncio.create_task(
+                        create_charge_receipt(
+                            user_party=party_id,
+                            tool=tool_name,
+                            amount=price_cc,
+                            request_id=str(mcp_request.id),
+                            description=f"MCP tool: {tool_name}"
+                        )
+                    )
+                    logger.info(f"💳 ChargeReceipt created (streaming): {tool_name} - {price_cc} CC from {party_id}")
+            except Exception as e:
+                logger.error(f"Failed to create ChargeReceipt: {e}")
+
         # Broadcast payment-required after response is generated (optimistic mode)
         # Reuse party_id from security gate (no env fallback)
         if payment_handler.canton_enabled and payment_handler.ws_client and party_id:
@@ -476,7 +504,7 @@ Return to Cursor after ~1 minute and your tools will work again.
                     )
                 )
                 logger.info(f"📤 Broadcasted payment-required: {tool_name} - ${price_usd} from {party_id}")
-        
+
         return StreamingResponse(
             create_sse_stream(tool_generator),
             media_type="text/event-stream",
@@ -491,6 +519,25 @@ Return to Cursor after ~1 minute and your tools will work again.
     # Non-streaming mode: collect and return final result
     final_response = await collect_final_result(tool_generator)
     if final_response:
+        # Create ChargeReceipt on-chain after successful tool execution
+        if payment_handler.canton_enabled and party_id:
+            try:
+                price_cc = payment_handler.get_tool_price(tool_name, arguments)
+                if price_cc > 0.0:  # Only charge for paid tools
+                    # Create ChargeReceipt on Canton ledger
+                    await create_charge_receipt(
+                        user_party=party_id,
+                        tool=tool_name,
+                        amount=price_cc,
+                        request_id=str(mcp_request.id),
+                        description=f"MCP tool: {tool_name}"
+                    )
+                    logger.info(f"💳 ChargeReceipt created: {tool_name} - {price_cc} CC from {party_id}")
+            except CantonBillingError as e:
+                logger.error(f"Failed to create ChargeReceipt: {e}")
+            except Exception as e:
+                logger.error(f"Unexpected error creating ChargeReceipt: {e}")
+
         # Broadcast payment-required after response is generated (optimistic mode)
         # Reuse party_id from security gate (no env fallback)
         if payment_handler.canton_enabled and payment_handler.ws_client and party_id:
@@ -508,7 +555,7 @@ Return to Cursor after ~1 minute and your tools will work again.
                     )
                 )
                 logger.debug(f"📤 Broadcasted payment-required for '{tool_name}' (non-streaming mode)")
-        
+
         return JSONResponse(content=final_response.to_camel_dict())
 
     return error_response(
@@ -583,7 +630,12 @@ async def handle_mcp_request(request: Request):
                 return error_response(
                     mcp_request.id,
                     ErrorCodes.INVALID_REQUEST,
-                    "Missing Authorization header. Authenticate at POST /auth/verify with challenge-response.",
+                    "Authentication required.\n\n"
+                    "Visit http://localhost:3050/mcp-setup to set up your Cursor MCP connection.\n\n"
+                    "The setup page will help you:\n"
+                    "- Generate your Canton party key\n"
+                    "- Authenticate with the MCP server\n"
+                    "- Get your mcp.json configuration",
                 )
 
             token = auth_header.replace("Bearer ", "")
@@ -892,6 +944,190 @@ async def authenticate_with_payment(request: Request):
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 
+
+
+@app.post("/billing/credit")
+async def create_billing_credit(request: Request):
+    """
+    Create a CreditReceipt on-chain when user tops up.
+
+    SECURITY: Requires either:
+    1. Valid BILLING_API_KEY header (for trusted callers like billing portal)
+    2. Valid on-chain transfer verification (transferId must exist and match)
+
+    Request: {
+        "userParty": "user::1220...",
+        "amount": 5.0,
+        "transferId": "canton-transaction-id",
+        "description": "Optional description"
+    }
+    Response: {
+        "success": true,
+        "contractId": "00...",
+        "balance": 3.0
+    }
+    """
+    import hmac
+
+    try:
+        body = await request.json()
+        user_party = body.get("userParty") or body.get("user_party")
+        amount = body.get("amount")
+        transfer_id = body.get("transferId") or body.get("transfer_id")
+        description = body.get("description")
+
+        if not user_party:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "userParty is required"}
+            )
+
+        if amount is None or amount <= 0:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "amount must be a positive number"}
+            )
+
+        if not transfer_id:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "transferId is required"}
+            )
+
+        # =============================================================================
+        # SECURITY: Two authentication methods
+        # =============================================================================
+        api_key = request.headers.get("X-Billing-API-Key", "")
+        expected_key = get_env("BILLING_API_KEY", "")
+        authorized = False
+
+        # Option 1: Valid API key (for billing portal)
+        if expected_key and api_key:
+            if hmac.compare_digest(api_key, expected_key):
+                authorized = True
+                logger.info(f"💳 Credit request authorized via API key for {user_party}")
+
+        # Option 2: Verify transfer exists on Canton ledger
+        if not authorized:
+            logger.info(f"🔍 Verifying transfer on-chain: {transfer_id}")
+            try:
+                verification = await verify_transfer_on_chain(
+                    transfer_id=transfer_id,
+                    user_party=user_party,
+                    expected_amount=float(amount),
+                )
+
+                if verification.get("verified"):
+                    authorized = True
+                    logger.info(f"💳 Credit request authorized via on-chain verification for {user_party}")
+                else:
+                    error_msg = verification.get("error", "Transfer verification failed")
+                    logger.warning(f"🚫 Transfer verification failed: {error_msg}")
+                    return JSONResponse(
+                        status_code=401,
+                        content={
+                            "error": "Unauthorized: Transfer verification failed",
+                            "details": error_msg,
+                            "transferId": transfer_id,
+                        }
+                    )
+            except CantonBillingError as e:
+                logger.warning(f"🚫 Transfer verification error: {e}")
+                return JSONResponse(
+                    status_code=401,
+                    content={
+                        "error": "Unauthorized: Unable to verify transfer",
+                        "details": str(e),
+                        "transferId": transfer_id,
+                    }
+                )
+
+        if not authorized:
+            logger.warning(f"🚫 Unauthorized credit attempt for {user_party}")
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "error": "Unauthorized: Invalid API key or unverified transfer",
+                    "hint": "Provide valid X-Billing-API-Key header or a verifiable transferId",
+                }
+            )
+
+        # =============================================================================
+        # Create CreditReceipt (includes duplicate prevention)
+        # =============================================================================
+        contract_id = await create_credit_receipt(
+            user_party=user_party,
+            amount=float(amount),
+            transfer_id=transfer_id,
+            description=description or f"Top-up via billing portal",
+        )
+
+        # Get updated balance
+        billing = await get_chain_balance(user_party)
+
+        logger.info(f"💳 CreditReceipt created: {contract_id} for {user_party} - {amount} CC")
+
+        return JSONResponse(content={
+            "success": True,
+            "contractId": contract_id,
+            "amount": amount,
+            "balance": billing.balance,
+            "totalCredited": billing.total_credited,
+            "totalCharged": billing.total_charged,
+        })
+
+    except CantonBillingError as e:
+        logger.error(f"Failed to create credit: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Failed to create credit receipt: {str(e)}"}
+        )
+    except Exception as e:
+        logger.error(f"Credit creation error: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )
+
+
+@app.get("/billing/balance/{party_id:path}")
+async def get_billing_balance(party_id: str):
+    """
+    Get the current balance for a user.
+
+    Response: {
+        "balance": 3.0,
+        "totalCredited": 5.0,
+        "totalCharged": 2.0,
+        "chargeCount": 10,
+        "creditCount": 1
+    }
+    """
+    try:
+        billing = await get_chain_balance(party_id)
+
+        return JSONResponse(content={
+            "balance": billing.balance,
+            "totalCredited": billing.total_credited,
+            "totalCharged": billing.total_charged,
+            "chargeCount": len(billing.charges),
+            "creditCount": len(billing.credits),
+        })
+
+    except CantonBillingError as e:
+        logger.error(f"Failed to get balance: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Failed to get balance: {str(e)}"}
+        )
+    except Exception as e:
+        logger.error(f"Balance query error: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )
+
+
 @app.get("/")
 async def root():
     """Server information endpoint"""
@@ -903,7 +1139,7 @@ async def root():
         "terms_endpoint": "/terms",
         "transport": "streamable-http",
         "streaming_format": "sse",
-        "description": "MCP server for Canton blockchain development with DAML validation",
+        "description": "MCP server for Canton blockchain development with DAML validation and on-chain billing",
     }
 
 
