@@ -626,11 +626,12 @@ async def handle_mcp_request(request: Request):
             auth_header = request.headers.get("Authorization")
 
             if not auth_header or not auth_header.startswith("Bearer "):
+                billing_portal_url = get_env("BILLING_PORTAL_URL", "http://localhost:3050")
                 return error_response(
                     mcp_request.id,
                     ErrorCodes.INVALID_REQUEST,
                     "Authentication required.\n\n"
-                    "Visit http://localhost:3050/mcp-setup to set up your Cursor MCP connection.\n\n"
+                    f"Visit {billing_portal_url}/mcp-setup to set up your Cursor MCP connection.\n\n"
                     "The setup page will help you:\n"
                     "- Generate your Canton party key\n"
                     "- Authenticate with the MCP server\n"
@@ -909,7 +910,7 @@ async def authenticate_with_payment(request: Request):
 
         # Verify transaction exists on Canton ledger and was signed by party
         facilitator_url = get_env(
-            "CANTON_FACILITATOR_URL", "http://localhost:3001"
+            "CANTON_FACILITATOR_URL", "http://localhost:3000"
         )
 
         try:
@@ -1162,8 +1163,9 @@ async def terms_of_service():
 if __name__ == "__main__":
     import uvicorn
 
+    mcp_server_url = get_env("MCP_SERVER_URL", "http://localhost:7284")
     print("\n" + "─" * 50)
-    print("  Canton MCP Server v0.1 | http://localhost:7284/mcp")
+    print(f"  Canton MCP Server v0.1 | {mcp_server_url}/mcp")
     print("─" * 50 + "\n")
 
     uvicorn.run(
