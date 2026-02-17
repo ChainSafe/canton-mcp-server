@@ -466,23 +466,26 @@ After top-up, return to Cursor and your tools will work again.
     if progress_token is not None:
         logger.debug(f"Progress token: {progress_token}")
 
-        # Create ChargeReceipt on-chain for streaming mode
+        # Create ChargeReceipt for streaming mode
         # (recorded immediately since streaming starts now)
         if payment_handler.canton_enabled and party_id:
             try:
                 price_cc = payment_handler.get_tool_price(tool_name, arguments)
                 if price_cc > 0.0:  # Only charge for paid tools
-                    # Create ChargeReceipt on Canton ledger (fire-and-forget)
-                    asyncio.create_task(
-                        create_charge_receipt(
-                            user_party=party_id,
-                            tool=tool_name,
-                            amount=price_cc,
-                            request_id=str(mcp_request.id),
-                            description=f"MCP tool: {tool_name}"
-                        )
-                    )
-                    logger.info(f"💳 ChargeReceipt created (streaming): {tool_name} - {price_cc} CC from {party_id}")
+                    # Create ChargeReceipt on Canton (fire-and-forget)
+                    async def create_charge():
+                        try:
+                            charge_contract_id = await create_charge_receipt(
+                                user_party=party_id,
+                                tool=tool_name,
+                                amount=price_cc,
+                                request_id=str(mcp_request.id),
+                            )
+                            logger.info(f"💳 ChargeReceipt created (streaming): {charge_contract_id}")
+                        except Exception as e:
+                            logger.error(f"Failed to create ChargeReceipt: {e}")
+                    asyncio.create_task(create_charge())
+                    logger.info(f"💳 Creating ChargeReceipt (streaming): {tool_name} - {price_cc} CC from {party_id}")
             except Exception as e:
                 logger.error(f"Failed to create ChargeReceipt: {e}")
 
@@ -518,24 +521,21 @@ After top-up, return to Cursor and your tools will work again.
     # Non-streaming mode: collect and return final result
     final_response = await collect_final_result(tool_generator)
     if final_response:
-        # Create ChargeReceipt on-chain after successful tool execution
+        # Create ChargeReceipt on Canton ledger
         if payment_handler.canton_enabled and party_id:
             try:
                 price_cc = payment_handler.get_tool_price(tool_name, arguments)
                 if price_cc > 0.0:  # Only charge for paid tools
-                    # Create ChargeReceipt on Canton ledger
-                    await create_charge_receipt(
+                    # Create ChargeReceipt contract on Canton
+                    charge_contract_id = await create_charge_receipt(
                         user_party=party_id,
                         tool=tool_name,
                         amount=price_cc,
                         request_id=str(mcp_request.id),
-                        description=f"MCP tool: {tool_name}"
                     )
-                    logger.info(f"💳 ChargeReceipt created: {tool_name} - {price_cc} CC from {party_id}")
-            except CantonBillingError as e:
-                logger.error(f"Failed to create ChargeReceipt: {e}")
+                    logger.info(f"💳 ChargeReceipt created on-chain: {tool_name} - {price_cc} CC from {party_id} (contract: {charge_contract_id})")
             except Exception as e:
-                logger.error(f"Unexpected error creating ChargeReceipt: {e}")
+                logger.error(f"Failed to create ChargeReceipt: {e}")
 
         # Broadcast payment-required after response is generated (optimistic mode)
         # Reuse party_id from security gate (no env fallback)
