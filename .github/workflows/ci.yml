@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, hamid/update-ci]
   pull_request:
 
 jobs:
