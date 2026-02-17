@@ -17,22 +17,8 @@ services:
     environment:
       # Tell the app to use system env vars (Docker injects from env_file)
       - IS_ISOLATED_ENVIRONMENT=true
-      # Server configuration
-      - MCP_SERVER_URL=http://localhost:7284
       # Canonical DAML documentation path
       - CANONICAL_DOCS_PATH=/opt/canonical-daml-docs
-      # DCAP (Performance Tracking) - adjust as needed
-      - DCAP_ENABLED=${DCAP_ENABLED:-true}
-      - DCAP_MULTICAST_IP=${DCAP_MULTICAST_IP:-159.89.110.236}
-      - DCAP_PORT=${DCAP_PORT:-10191}
-      - DCAP_SERVER_ID=${DCAP_SERVER_ID:-canton-mcp-prod}
-      - DCAP_SERVER_NAME=${DCAP_SERVER_NAME:-Canton MCP Production}
-      # x402 Payment Configuration (disabled by default)
-      - X402_ENABLED=${X402_ENABLED:-false}
-      - X402_WALLET_ADDRESS=${X402_WALLET_ADDRESS:-}
-      - X402_WALLET_PRIVATE_KEY=${X402_WALLET_PRIVATE_KEY:-}
-      - X402_NETWORK=${X402_NETWORK:-base-sepolia}
-      - X402_TOKEN=${X402_TOKEN:-USDC}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:7284/health').read()"]

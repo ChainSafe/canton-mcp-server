@@ -64,5 +64,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:7284/health').read()" || exit 1
 
 # Default command
-CMD ["uv", "run", "canton-mcp-server", "serve"]
+CMD ["canton-mcp-server"]
 
