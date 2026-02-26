@@ -20,6 +20,7 @@ This tool integrates:
 import logging
 import os
 import re
+import threading
 from typing import List, Optional
 from pathlib import Path
 
@@ -129,16 +130,22 @@ class DamlReasonTool(Tool[DamlReasonParams, DamlReasonResult]):
         super().__init__()
         # Initialize SafetyChecker (loads anti-patterns internally via ResourceLoader)
         self.safety_checker = SafetyChecker()
-        
+
         # Initialize semantic search components (simple and direct)
         canonical_docs_path = Path(os.environ.get("CANONICAL_DOCS_PATH", "../../canonical-daml-docs"))
         self.loader = DirectFileResourceLoader(canonical_docs_path)
         self._raw_resources = None
         self._semantic_search: Optional[DAMLSemanticSearch] = None
+        self._semantic_search_lock = threading.Lock()
 
     def _ensure_semantic_search(self):
         """Ensure semantic search is initialized with raw resources."""
-        if self._semantic_search is None:
+        if self._semantic_search is not None:
+            return  # Fast path (no lock needed)
+
+        with self._semantic_search_lock:
+            if self._semantic_search is not None:
+                return  # Double-check after acquiring lock
             logger.info("🔍 Initializing semantic search...")
             
             # Load raw resources directly from repos (no enrichment, no caching)

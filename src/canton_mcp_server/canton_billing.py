@@ -10,12 +10,13 @@ managed by the Canton participant).
 """
 
 import asyncio
+import base64
 import logging
 import os
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Set
 
 import httpx
 
@@ -45,6 +46,19 @@ _token_cache: dict = {"token": None, "expires_at": 0}
 # ChargeManager contract cache
 _charge_manager_cache: dict = {"contract_id": None, "timestamp": 0}
 CACHE_TTL = 5 * 60  # 5 minutes
+
+# Validator API configuration (for external party registration)
+VALIDATOR_API_URL = os.getenv("VALIDATOR_API_URL", "http://localhost:3903/api/validator")
+VALIDATOR_OAUTH_TOKEN_URL = os.getenv("VALIDATOR_OAUTH_TOKEN_URL", "")
+VALIDATOR_OAUTH_CLIENT_ID = os.getenv("VALIDATOR_OAUTH_CLIENT_ID", "")
+VALIDATOR_OAUTH_CLIENT_SECRET = os.getenv("VALIDATOR_OAUTH_CLIENT_SECRET", "")
+VALIDATOR_OAUTH_AUDIENCE = os.getenv("VALIDATOR_OAUTH_AUDIENCE", "")
+
+# Validator OAuth token cache (separate from ledger API token)
+_validator_token_cache: dict = {"token": None, "expires_at": 0}
+
+# In-memory cache of parties already registered on-chain
+_registered_parties: Set[str] = set()
 
 
 @dataclass
@@ -93,6 +107,191 @@ class OAuthError(CantonBillingError):
 class LedgerError(CantonBillingError):
     """Canton ledger API error"""
     pass
+
+
+async def _get_validator_oauth_token() -> str:
+    """
+    Get OAuth2 access token for Validator Admin API.
+
+    Uses client_credentials flow. Tokens are cached until near expiry.
+    Uses separate credentials from the ledger API token.
+    """
+    global _validator_token_cache
+
+    # Check cache
+    if _validator_token_cache["token"] and time.time() < _validator_token_cache["expires_at"] - 60:
+        return _validator_token_cache["token"]
+
+    if not VALIDATOR_OAUTH_TOKEN_URL or not VALIDATOR_OAUTH_CLIENT_SECRET:
+        raise OAuthError("Validator OAuth not configured (VALIDATOR_OAUTH_TOKEN_URL / VALIDATOR_OAUTH_CLIENT_SECRET)")
+
+    logger.info(f"Fetching Validator OAuth token from {VALIDATOR_OAUTH_TOKEN_URL}")
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            token_data = {
+                "grant_type": "client_credentials",
+                "client_id": VALIDATOR_OAUTH_CLIENT_ID,
+                "client_secret": VALIDATOR_OAUTH_CLIENT_SECRET,
+            }
+            if VALIDATOR_OAUTH_AUDIENCE:
+                token_data["audience"] = VALIDATOR_OAUTH_AUDIENCE
+
+            response = await client.post(
+                VALIDATOR_OAUTH_TOKEN_URL,
+                data=token_data,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+
+            if response.status_code != 200:
+                error_text = response.text
+                logger.error(f"Validator OAuth token request failed: {response.status_code} {error_text}")
+                raise OAuthError(f"Failed to get Validator OAuth token: {response.status_code} {error_text}")
+
+            data = response.json()
+            token = data["access_token"]
+            expires_in = data.get("expires_in", 3600)
+
+            _validator_token_cache = {
+                "token": token,
+                "expires_at": time.time() + expires_in,
+            }
+
+            logger.info(f"Validator OAuth token obtained, expires in {expires_in}s")
+            return token
+
+    except httpx.RequestError as e:
+        raise OAuthError(f"Validator OAuth request failed: {e}")
+
+
+async def generate_topology_for_party(
+    party_id: str, public_key_b64: str
+) -> Optional[list]:
+    """
+    Generate topology transactions for external party registration.
+
+    Calls the Validator Admin API's topology/generate endpoint.
+    Returns topology transactions that need to be signed by the party's private key.
+
+    Args:
+        party_id: Full Canton party ID (e.g., "test-limit::1220...")
+        public_key_b64: Base64-encoded Ed25519 public key
+
+    Returns:
+        List of {topology_tx, hash} dicts, or None if party already registered
+    """
+    if party_id in _registered_parties:
+        return None
+
+    party_hint = party_id.split("::")[0] if "::" in party_id else party_id
+    public_key_hex = base64.b64decode(public_key_b64).hex()
+
+    logger.info(f"Generating topology for party: {party_id} (hint: {party_hint})")
+
+    try:
+        token = await _get_validator_oauth_token()
+
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(
+                f"{VALIDATOR_API_URL}/v0/admin/external-party/topology/generate",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "party_hint": party_hint,
+                    "public_key": public_key_hex,
+                },
+            )
+
+        if response.status_code != 200:
+            error_text = response.text
+            # "already exists" or "TOPOLOGY_SERIAL_MISMATCH" means party is registered
+            if any(s in error_text for s in [
+                "already exists", "ALREADY_EXISTS",
+                "TOPOLOGY_SERIAL_MISMATCH", "serial_mismatch",
+            ]):
+                _registered_parties.add(party_id)
+                logger.info(f"Party already registered: {party_id}")
+                return None
+            raise CantonBillingError(
+                f"Topology generate failed: {response.status_code} {error_text}"
+            )
+
+        data = response.json()
+        topology_txs = data.get("topology_txs", [])
+        logger.info(f"Generated {len(topology_txs)} topology transactions for {party_id}")
+        return topology_txs
+
+    except (OAuthError, CantonBillingError):
+        raise
+    except Exception as e:
+        raise CantonBillingError(f"Topology generation error: {e}")
+
+
+async def submit_signed_topology(
+    party_id: str,
+    public_key_b64: str,
+    signed_topology_txs: list,
+) -> bool:
+    """
+    Submit signed topology transactions to register the party.
+
+    Args:
+        party_id: Full Canton party ID
+        public_key_b64: Base64-encoded Ed25519 public key
+        signed_topology_txs: List of {topology_tx, signed_hash} dicts
+
+    Returns:
+        True if party registered successfully
+    """
+    public_key_hex = base64.b64decode(public_key_b64).hex()
+
+    logger.info(f"Submitting {len(signed_topology_txs)} signed topology txs for {party_id}")
+
+    try:
+        token = await _get_validator_oauth_token()
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{VALIDATOR_API_URL}/v0/admin/external-party/topology/submit",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "signed_topology_txs": signed_topology_txs,
+                    "public_key": public_key_hex,
+                },
+            )
+
+        if response.status_code == 200:
+            _registered_parties.add(party_id)
+            logger.info(f"Party registered on-chain: {party_id}")
+            return True
+
+        error_text = response.text
+        if any(s in error_text for s in [
+            "already exists", "ALREADY_EXISTS",
+            "TOPOLOGY_SERIAL_MISMATCH", "serial_mismatch",
+        ]):
+            _registered_parties.add(party_id)
+            logger.info(f"Party already registered: {party_id}")
+            return True
+
+        raise CantonBillingError(
+            f"Topology submit failed: {response.status_code} {error_text}"
+        )
+
+    except (OAuthError, CantonBillingError):
+        raise
+    except Exception as e:
+        raise CantonBillingError(f"Topology submit error: {e}")
+
+
+def is_party_registered(party_id: str) -> bool:
+    """Check if party is in the registered cache."""
+    return party_id in _registered_parties
 
 
 async def get_oauth_token() -> str:

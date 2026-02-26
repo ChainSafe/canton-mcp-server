@@ -22,6 +22,7 @@ See:
 """
 
 import asyncio
+import base64
 import datetime
 import json
 import logging
@@ -72,6 +73,7 @@ from canton_mcp_server.auth import (
     verify_jwt_token,
     generate_challenge,
     verify_challenge_signature,
+    get_stored_public_key,
     AuthError,
 )
 from canton_mcp_server.canton_billing import (
@@ -79,6 +81,9 @@ from canton_mcp_server.canton_billing import (
     create_charge_receipt,
     create_credit_receipt,
     verify_transfer_on_chain,
+    generate_topology_for_party,
+    submit_signed_topology,
+    is_party_registered,
     CantonBillingError,
 )
 
@@ -96,6 +101,15 @@ payment_handler = PaymentHandler()
 # =============================================================================
 # Application Lifecycle
 # =============================================================================
+
+
+def _warmup_semantic_search(registry):
+    """Initialize semantic search eagerly at startup (runs in thread)."""
+    try:
+        tool = registry.get_tool("daml_reason")
+        tool._ensure_semantic_search()
+    except Exception as e:
+        logger.warning(f"Semantic search warmup failed (non-blocking): {e}")
 
 
 @asynccontextmanager
@@ -125,6 +139,11 @@ async def lifespan(app: FastAPI):
                 logger.warning("⚠️  Failed to connect to facilitator WebSocket, will retry in background")
         except Exception as e:
             logger.warning(f"⚠️  Error connecting to facilitator WebSocket: {e}")
+
+    # Eagerly initialize semantic search in background thread (blocking I/O)
+    logger.info("🔍 Warming up semantic search...")
+    await asyncio.to_thread(_warmup_semantic_search, registry)
+    logger.info("✅ Semantic search warmed up")
 
     # Start DCAP semantic_discover broadcasting
     broadcast_task = None
@@ -281,24 +300,30 @@ async def handle_tool_call_request(mcp_request: JSONRPCRequest, request: Request
         try:
             billing = await get_chain_balance(party_id)
             balance = billing.balance  # credits - charges
+            total_calls = len(billing.charges)
+            free_tier_calls = int(get_env("FREE_TIER_CALLS", "20"))
 
-            logger.info(f"💰 On-chain balance: {balance:.2f} CC (credited: {billing.total_credited:.2f}, charged: {billing.total_charged:.2f}) for {party_id}")
+            logger.info(f"💰 On-chain balance: {balance:.2f} CC (credited: {billing.total_credited:.2f}, charged: {billing.total_charged:.2f}, calls: {total_calls}) for {party_id}")
 
-            # Block if balance is negative (user owes money)
-            # Allow a small threshold before blocking (configurable, default -2.0 CC)
-            min_balance = float(get_env("MIN_BALANCE_THRESHOLD", "-2.0"))
-            if balance < min_balance:
-                # Balance too low - deny access with detailed message
-                billing_portal_url = get_env("BILLING_PORTAL_URL", "http://localhost:3050")
-                provider_wallet = get_env(
-                    "CANTON_PAYEE_PARTY",
-                    "app_provider_quickstart-skynet-1::1220de769fb9fa9505bb61fc6fc1e30507829f8179e140645f40e222bc7bcdac21d7"
-                )
-                owed = abs(balance) if balance < 0 else 0
-                logger.warning(f"🚫 Access denied for {party_id}: balance {balance:.2f} CC < minimum {min_balance:.2f} CC")
+            if total_calls < free_tier_calls:
+                # Free tier - user still has free calls remaining
+                remaining = free_tier_calls - total_calls
+                logger.info(f"✅ Free tier: {remaining}/{free_tier_calls} free calls remaining for {party_id}")
+            else:
+                # Past free tier - require positive balance (allow overdraft up to threshold)
+                min_balance = float(get_env("MIN_BALANCE_THRESHOLD", "-2.0"))
+                if balance < min_balance:
+                    # Balance too low - deny access with detailed message
+                    billing_portal_url = get_env("BILLING_PORTAL_URL", "http://localhost:3050")
+                    provider_wallet = get_env(
+                        "CANTON_PAYEE_PARTY",
+                        "app_provider_quickstart-skynet-1::1220de769fb9fa9505bb61fc6fc1e30507829f8179e140645f40e222bc7bcdac21d7"
+                    )
+                    owed = abs(balance) if balance < 0 else 0
+                    logger.warning(f"🚫 Access denied for {party_id}: balance {balance:.2f} CC < minimum {min_balance:.2f} CC ({total_calls} calls, free tier exhausted)")
 
-                # Direct users to billing portal for self-service payment
-                error_msg = f"""Payment required: Your balance is {balance:.2f} CC (you owe {owed:.2f} CC).
+                    # Direct users to billing portal for self-service payment
+                    error_msg = f"""Payment required: Your balance is {balance:.2f} CC (you owe {owed:.2f} CC). Free tier ({free_tier_calls} calls) exhausted.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 TOP UP YOUR ACCOUNT
@@ -318,13 +343,13 @@ Recommended amount: 5 CC
 After top-up, return to Cursor and your tools will work again.
 """
 
-                return error_response(
-                    mcp_request.id,
-                    ErrorCodes.INVALID_REQUEST,
-                    error_msg,
-                )
-            else:
-                logger.info(f"✅ Balance check passed: {balance:.2f} CC >= {min_balance:.2f} CC minimum")
+                    return error_response(
+                        mcp_request.id,
+                        ErrorCodes.INVALID_REQUEST,
+                        error_msg,
+                    )
+                else:
+                    logger.info(f"✅ Paid tier: balance {balance:.2f} CC >= {min_balance:.2f} CC minimum ({total_calls} calls)")
         except CantonBillingError as e:
             logger.warning(f"❌ On-chain balance check failed for {party_id}: {e} - serving optimistically")
         except Exception as e:
@@ -769,6 +794,9 @@ async def health_check():
     }
 
 
+# Topology transaction store: {party_id: [{topology_tx, hash}, ...]}
+_pending_topology: dict = {}
+
 @app.post("/auth/challenge")
 async def request_auth_challenge(request: Request):
     """
@@ -781,7 +809,8 @@ async def request_auth_challenge(request: Request):
     Response: {
         "challenge": "base64-encoded-nonce",
         "expiresIn": 300,
-        "requiresPublicKey": false
+        "requiresPublicKey": false,
+        "topologyHashes": ["hash1", ...] (if party needs on-chain registration)
     }
     """
     try:
@@ -813,14 +842,40 @@ async def request_auth_challenge(request: Request):
         try:
             challenge = generate_challenge(party_id, public_key)
 
-            return JSONResponse(
-                content={
-                    "challenge": challenge,
-                    "expiresIn": 300,
-                    "requiresPublicKey": False,
-                    "message": "Sign this challenge with your Canton party's private key",
-                }
-            )
+            response_data = {
+                "challenge": challenge,
+                "expiresIn": 300,
+                "requiresPublicKey": False,
+                "message": "Sign this challenge with your Canton party's private key",
+            }
+
+            # If Canton billing enabled, generate topology for party registration
+            if payment_handler.canton_enabled and not is_party_registered(party_id):
+                pk_b64 = public_key or (
+                    base64.b64encode(_public_key_store[party_id]).decode()
+                    if party_id in _public_key_store else None
+                )
+                if pk_b64:
+                    try:
+                        topology_txs = await generate_topology_for_party(party_id, pk_b64)
+                        if topology_txs:
+                            # Store topology txs for submission during verify
+                            _pending_topology[party_id] = topology_txs
+                            # Return hashes for client to sign
+                            response_data["topologyHashes"] = [
+                                tx["hash"] for tx in topology_txs
+                            ]
+                            response_data["message"] = (
+                                "Sign this challenge AND each topologyHash with your private key"
+                            )
+                            logger.info(
+                                f"Party {party_id} needs registration: "
+                                f"{len(topology_txs)} topology txs to sign"
+                            )
+                    except Exception as e:
+                        logger.warning(f"Topology generation failed (non-blocking): {e}")
+
+            return JSONResponse(content=response_data)
         except AuthError as e:
             return JSONResponse(status_code=400, content={"error": str(e)})
 
@@ -837,10 +892,12 @@ async def verify_auth_signature(request: Request):
     Request: {
         "partyId": "alice::1220...",
         "challenge": "base64-challenge",
-        "signature": "base64-signature"
+        "signature": "base64-signature",
+        "topologySignatures": ["hex-sig1", ...] (optional, for party registration)
     }
     Response: {
-        "token": "eyJhbGc..."
+        "token": "eyJhbGc...",
+        "partyRegistered": true/false (if topology was submitted)
     }
     """
     try:
@@ -848,6 +905,7 @@ async def verify_auth_signature(request: Request):
         party_id = body.get("partyId")
         challenge = body.get("challenge")
         signature = body.get("signature")
+        topology_signatures = body.get("topologySignatures", [])
 
         if not all([party_id, challenge, signature]):
             return JSONResponse(
@@ -866,6 +924,38 @@ async def verify_auth_signature(request: Request):
                 content={"error": f"Authentication failed: {str(e)}"},
             )
 
+        # Submit signed topology transactions if provided
+        party_registered = False
+        if (
+            payment_handler.canton_enabled
+            and topology_signatures
+            and party_id in _pending_topology
+        ):
+            try:
+                topology_txs = _pending_topology.pop(party_id)
+                if len(topology_signatures) == len(topology_txs):
+                    signed_txs = [
+                        {
+                            "topology_tx": tx["topology_tx"],
+                            "signed_hash": sig,
+                        }
+                        for tx, sig in zip(topology_txs, topology_signatures)
+                    ]
+                    public_key_bytes = get_stored_public_key(party_id)
+                    public_key_b64 = base64.b64encode(public_key_bytes).decode()
+                    party_registered = await submit_signed_topology(
+                        party_id, public_key_b64, signed_txs
+                    )
+                    if party_registered:
+                        logger.info(f"Party registered on-chain: {party_id}")
+                else:
+                    logger.warning(
+                        f"Topology signature count mismatch: "
+                        f"expected {len(topology_txs)}, got {len(topology_signatures)}"
+                    )
+            except Exception as e:
+                logger.warning(f"Party registration failed (non-blocking): {e}")
+
         # Generate JWT token
         token = generate_jwt_token(party_id, f"challenge-{challenge[:16]}")
 
@@ -873,7 +963,11 @@ async def verify_auth_signature(request: Request):
             f"✅ Authentication successful for {party_id} via signature verification"
         )
 
-        return JSONResponse(content={"token": token})
+        response_data = {"token": token}
+        if topology_signatures:
+            response_data["partyRegistered"] = party_registered
+
+        return JSONResponse(content=response_data)
 
     except Exception as e:
         logger.error(f"Authentication error: {e}")

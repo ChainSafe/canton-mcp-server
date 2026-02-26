@@ -63,6 +63,7 @@ ENV_VALUES["X402_TOKEN"] = os.getenv("X402_TOKEN", "USDC")
 ENV_VALUES["DAML_SDK_VERSION"] = os.getenv("DAML_SDK_VERSION", "3.4.0-snapshot.20251013.0")
 
 # Canton x402 Payment Configuration (Canton Coins on Canton Network)
+ENV_VALUES["FREE_TIER_CALLS"] = os.getenv("FREE_TIER_CALLS", "20")
 ENV_VALUES["CANTON_ENABLED"] = os.getenv("CANTON_ENABLED", "false")
 ENV_VALUES["CANTON_FACILITATOR_URL"] = os.getenv("CANTON_FACILITATOR_URL", "http://localhost:3000")
 ENV_VALUES["CANTON_PAYEE_PARTY"] = os.getenv("CANTON_PAYEE_PARTY", "")
@@ -105,6 +106,13 @@ ENV_VALUES["LLM_ENRICHMENT_MAX_TOKENS"] = os.getenv("LLM_ENRICHMENT_MAX_TOKENS",
 # When disabled, falls back to regex patterns (degraded mode)
 ENV_VALUES["ENABLE_LLM_AUTH_EXTRACTION"] = os.getenv("ENABLE_LLM_AUTH_EXTRACTION", "true")
 ENV_VALUES["LLM_AUTH_CONFIDENCE_THRESHOLD"] = os.getenv("LLM_AUTH_CONFIDENCE_THRESHOLD", "0.7")
+
+# Validator API Configuration (for external party registration)
+ENV_VALUES["VALIDATOR_API_URL"] = os.getenv("VALIDATOR_API_URL", "http://localhost:3903/api/validator")
+ENV_VALUES["VALIDATOR_OAUTH_TOKEN_URL"] = os.getenv("VALIDATOR_OAUTH_TOKEN_URL", "")
+ENV_VALUES["VALIDATOR_OAUTH_CLIENT_ID"] = os.getenv("VALIDATOR_OAUTH_CLIENT_ID", "")
+ENV_VALUES["VALIDATOR_OAUTH_CLIENT_SECRET"] = os.getenv("VALIDATOR_OAUTH_CLIENT_SECRET", "")
+ENV_VALUES["VALIDATOR_OAUTH_AUDIENCE"] = os.getenv("VALIDATOR_OAUTH_AUDIENCE", "")
 
 
 def get_env(key: str, default: str = "") -> str:

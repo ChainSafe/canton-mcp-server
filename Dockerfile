@@ -23,6 +23,10 @@ COPY src/ ./src/
 # Install dependencies
 RUN uv sync --frozen --no-dev
 
+# Pre-download ChromaDB ONNX embedding model (79MB)
+# Avoids downloading on first request at runtime
+RUN uv run python -c "from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2; ONNXMiniLM_L6_V2()"
+
 # Clone documentation repositories
 RUN mkdir -p /app/docs && \
     git clone --depth 1 https://github.com/digital-asset/daml.git /app/docs/daml && \
