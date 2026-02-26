@@ -29,6 +29,7 @@ CANTON_OAUTH_TOKEN_URL = os.getenv(
 )
 CANTON_OAUTH_CLIENT_ID = os.getenv("CANTON_OAUTH_CLIENT_ID", "app-provider-validator")
 CANTON_OAUTH_CLIENT_SECRET = os.getenv("CANTON_OAUTH_CLIENT_SECRET", "")
+CANTON_OAUTH_AUDIENCE = os.getenv("CANTON_OAUTH_AUDIENCE", "")
 CANTON_PROVIDER_PARTY = os.getenv("CANTON_PROVIDER_PARTY", "")
 # Canton user ID (UUID) - different from OAuth client ID
 # This is the user ID registered in Canton's User Management service
@@ -114,13 +115,17 @@ async def get_oauth_token() -> str:
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(
-                CANTON_OAUTH_TOKEN_URL,
-                data={
+            token_data = {
                     "grant_type": "client_credentials",
                     "client_id": CANTON_OAUTH_CLIENT_ID,
                     "client_secret": CANTON_OAUTH_CLIENT_SECRET,
-                },
+                }
+            if CANTON_OAUTH_AUDIENCE:
+                token_data["audience"] = CANTON_OAUTH_AUDIENCE
+
+            response = await client.post(
+                CANTON_OAUTH_TOKEN_URL,
+                data=token_data,
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
             )
 
