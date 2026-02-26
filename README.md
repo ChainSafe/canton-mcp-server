@@ -33,6 +33,55 @@ Automate Canton environments, tests, and builds.
 
 **Use for:** Spinning up Canton networks, running tests, building DARs
 
+## Authentication
+
+The server uses **cryptographic challenge-response authentication** for secure party verification.
+
+### Quick Auth (Command Line)
+
+```bash
+# Get JWT token for your Canton party
+cd /home/skynet/canton/canton-mcp-client
+npm install && npm run build
+node dist/auth.js http://localhost:7284 your-party::1220...
+
+# Returns JWT token - use in Authorization header
+```
+
+### Python Authentication
+
+```python
+import base64, json, requests
+from nacl.signing import SigningKey
+
+def authenticate(mcp_url, party_id, key_file):
+    with open(key_file) as f:
+        key = json.load(f)
+
+    # Request challenge
+    r = requests.post(f'{mcp_url}/auth/challenge', json={
+        'partyId': party_id,
+        'publicKey': key['publicKey']
+    })
+    challenge = r.json()['challenge']
+
+    # Sign challenge
+    sk = SigningKey(base64.b64decode(key['privateKey']))
+    sig = sk.sign(base64.b64decode(challenge)).signature
+
+    # Get token
+    r = requests.post(f'{mcp_url}/auth/verify', json={
+        'partyId': party_id,
+        'challenge': challenge,
+        'signature': base64.b64encode(sig).decode()
+    })
+    return r.json()['token']
+
+token = authenticate('http://localhost:7284', 'alice::1220...', '~/.canton/alice-key.json')
+```
+
+See [CHALLENGE_AUTH_SETUP.md](/home/skynet/canton/CHALLENGE_AUTH_SETUP.md) for complete guide.
+
 ## Configuration
 
 ### For Cursor
@@ -46,12 +95,15 @@ Add to `.cursor/mcp.json`:
       "type": "sse",
       "url": "http://<you-server-ip-or.domain>:7284/mcp",
       "headers": {
-        "X-Canton-Party-ID": "your-party::1220abc..."
+        "Authorization": "Bearer <jwt-token-from-auth>"
       }
     }
   }
 }
 ```
+
+**Note**: Replace `<jwt-token-from-auth>` with token from authentication flow above.
+JWT tokens expire after 1 hour - re-authenticate to get a new token.
 
 ### For Claude Desktop
 
@@ -76,6 +128,9 @@ Create `.env.canton`:
 # Server
 MCP_SERVER_URL=http://localhost:7284
 
+# Authentication (REQUIRED)
+JWT_SECRET=$(openssl rand -hex 32)  # Generate with: openssl rand -hex 32
+
 # x402 Payments (REQUIRED for production)
 CANTON_ENABLED=true
 CANTON_FACILITATOR_URL=http://46.224.109.63:3000
@@ -89,6 +144,11 @@ DCAP_PORT=10191
 
 # Canonical docs path (optional, defaults to ../../canonical-daml-docs)
 CANONICAL_DOCS_PATH=/path/to/canonical-daml-docs
+```
+
+**Important**: `JWT_SECRET` is required for authentication. Generate a secure secret:
+```bash
+echo "JWT_SECRET=$(openssl rand -hex 32)" >> .env.canton
 ```
 
 ## Installation
