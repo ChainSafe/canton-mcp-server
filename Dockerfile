@@ -25,9 +25,9 @@ RUN uv sync --frozen --no-dev
 
 # Clone documentation repositories
 RUN mkdir -p /app/docs && \
-    git clone https://github.com/digital-asset/daml.git /app/docs/daml && \
-    git clone https://github.com/digital-asset/canton.git /app/docs/canton && \
-    git clone https://github.com/digital-asset/daml-finance.git /app/docs/daml-finance
+    git clone --depth 1 https://github.com/digital-asset/daml.git /app/docs/daml && \
+    git clone --depth 1 https://github.com/digital-asset/canton.git /app/docs/canton && \
+    git clone --depth 1 https://github.com/digital-asset/daml-finance.git /app/docs/daml-finance
 
 # Final stage
 FROM python:3.12-slim
