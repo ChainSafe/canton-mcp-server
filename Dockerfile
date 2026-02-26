@@ -3,6 +3,11 @@
 
 FROM python:3.12-slim AS builder
 
+# Install git for cloning documentation repositories
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends git && \
+    rm -rf /var/lib/apt/lists/*
+
 # Install uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
@@ -18,13 +23,14 @@ COPY src/ ./src/
 # Install dependencies
 RUN uv sync --frozen --no-dev
 
+# Clone documentation repositories
+RUN mkdir -p /app/docs && \
+    git clone --depth 1 https://github.com/digital-asset/daml.git /app/docs/daml && \
+    git clone --depth 1 https://github.com/digital-asset/canton.git /app/docs/canton && \
+    git clone --depth 1 https://github.com/digital-asset/daml-finance.git /app/docs/daml-finance
+
 # Final stage
 FROM python:3.12-slim
-
-# Install system dependencies (git for canonical repo verification)
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends git && \
-    rm -rf /var/lib/apt/lists/*
 
 # Install uv in final stage
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
@@ -34,15 +40,13 @@ RUN useradd -m -u 1000 canton && \
     mkdir -p /app && \
     chown -R canton:canton /app
 
-# Configure git to trust mounted canonical repos (fixes ownership security check)
-RUN git config --system --add safe.directory /opt/canonical-daml-docs/daml && \
-    git config --system --add safe.directory /opt/canonical-daml-docs/canton && \
-    git config --system --add safe.directory /opt/canonical-daml-docs/daml-finance
-
 WORKDIR /app
 
 # Copy installed dependencies from builder
 COPY --from=builder --chown=canton:canton /app/.venv /app/.venv
+
+# Copy documentation repositories from builder
+COPY --from=builder --chown=canton:canton /app/docs /app/docs
 
 # Copy application code
 COPY --chown=canton:canton pyproject.toml uv.lock README.md ./
