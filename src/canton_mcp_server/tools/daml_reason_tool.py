@@ -23,7 +23,7 @@ import re
 from typing import List, Optional
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from ..core import Tool, ToolContext, register_tool
 from ..core.pricing import PricingType, ToolPricing
@@ -41,6 +41,18 @@ class DamlReasonParams(MCPModel):
     business_intent: str = Field(
         description="What the developer wants to achieve with this DAML code"
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_query_alias(cls, data: dict) -> dict:
+        """Accept 'query' as an alias for 'businessIntent'/'business_intent'."""
+        if isinstance(data, dict):
+            if "business_intent" not in data and "businessIntent" not in data:
+                query = data.pop("query", None)
+                if query:
+                    data["business_intent"] = query
+        return data
+
     daml_code: Optional[str] = Field(
         default=None,
         description="DAML code to analyze (optional - if not provided, only pattern recommendations returned)"
