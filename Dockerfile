@@ -24,7 +24,7 @@ COPY src/ ./src/
 RUN uv sync --frozen --no-dev
 
 # Pre-download ChromaDB ONNX embedding model (79MB)
-# Avoids downloading on first request at runtime
+# Downloads to /root/.cache/chroma/ - will be copied to final stage
 RUN uv run python -c "from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2; ONNXMiniLM_L6_V2()"
 
 # Clone documentation repositories
@@ -56,6 +56,9 @@ COPY --from=builder --chown=canton:canton /app/.venv /app/.venv
 
 # Copy documentation repositories from builder
 COPY --from=builder --chown=canton:canton /app/docs /app/docs
+
+# Copy pre-downloaded ONNX model from builder (avoids 79MB download at runtime)
+COPY --from=builder --chown=canton:canton /root/.cache/chroma /home/canton/.cache/chroma
 
 # Copy application code
 COPY --chown=canton:canton pyproject.toml uv.lock README.md ./
