@@ -24,8 +24,10 @@ COPY src/ ./src/
 RUN uv sync --frozen --no-dev
 
 # Pre-download ChromaDB ONNX embedding model (79MB)
-# Downloads to /root/.cache/chroma/ - will be copied to final stage
-RUN uv run python -c "from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2; ONNXMiniLM_L6_V2()"
+# Avoids 79MB download on first request at runtime
+# Must call ef() with text — constructor alone is lazy in chromadb 1.x
+# HOME must be explicit so Path.home() resolves to /root under uv
+RUN HOME=/root uv run python -c "from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2; ONNXMiniLM_L6_V2()(['warmup'])"
 
 # Clone documentation repositories
 RUN mkdir -p /app/docs && \
