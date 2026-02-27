@@ -140,10 +140,17 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"⚠️  Error connecting to facilitator WebSocket: {e}")
 
-    # Eagerly initialize semantic search in background thread (blocking I/O)
-    logger.info("🔍 Warming up semantic search...")
-    await asyncio.to_thread(_warmup_semantic_search, registry)
-    logger.info("✅ Semantic search warmed up")
+    # Eagerly initialize semantic search in background (non-blocking)
+    # Runs in a thread so it doesn't block the event loop or delay server startup
+    async def _warmup_task():
+        try:
+            logger.info("🔍 Warming up semantic search (background)...")
+            await asyncio.to_thread(_warmup_semantic_search, registry)
+            logger.info("✅ Semantic search warmed up")
+        except Exception as e:
+            logger.warning(f"Semantic search warmup task failed: {e}")
+
+    warmup_task = asyncio.create_task(_warmup_task())
 
     # Start DCAP semantic_discover broadcasting
     broadcast_task = None
@@ -188,6 +195,14 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"⚠️  Error disconnecting WebSocket: {e}")
     
+    # Cancel warmup task if still running
+    if warmup_task and not warmup_task.done():
+        warmup_task.cancel()
+        try:
+            await warmup_task
+        except asyncio.CancelledError:
+            pass
+
     # Cancel broadcast task
     if broadcast_task:
         broadcast_task.cancel()
