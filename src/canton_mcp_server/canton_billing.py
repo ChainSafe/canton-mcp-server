@@ -310,7 +310,7 @@ async def get_oauth_token() -> str:
     if not CANTON_OAUTH_CLIENT_SECRET:
         raise OAuthError("CANTON_OAUTH_CLIENT_SECRET not configured")
 
-    logger.info(f"Fetching OAuth token from {CANTON_OAUTH_TOKEN_URL}")
+    logger.info(f"Fetching OAuth token from {CANTON_OAUTH_TOKEN_URL} (audience={CANTON_OAUTH_AUDIENCE!r})")
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -342,7 +342,7 @@ async def get_oauth_token() -> str:
                 "expires_at": time.time() + expires_in,
             }
 
-            logger.info(f"OAuth token obtained, expires in {expires_in}s")
+            logger.info(f"OAuth token obtained, expires in {expires_in}s (aud={CANTON_OAUTH_AUDIENCE}, user={CANTON_USER_ID})")
             return token
 
     except httpx.RequestError as e:
@@ -392,7 +392,21 @@ async def _make_ledger_request(
                     response = await client.post(url, headers=headers, json=data)
 
             if response.status_code == 403:
-                logger.error(f"Ledger 403 Forbidden: {response.text}")
+                # 403 can mean stale/bad token — clear cache and retry once
+                logger.warning(f"Ledger 403 Forbidden (retrying with fresh token): {response.text}")
+                _token_cache["token"] = None
+                token = await get_oauth_token()
+                headers["Authorization"] = f"Bearer {token}"
+
+                if method == "GET":
+                    response = await client.get(url, headers=headers)
+                else:
+                    response = await client.post(url, headers=headers, json=data)
+
+                if response.status_code in (200, 201):
+                    return response.json()
+
+                logger.error(f"Ledger 403 Forbidden after token refresh: {response.text}")
                 raise LedgerError(f"Access denied to Canton API: {response.text}")
 
             if response.status_code not in (200, 201):
