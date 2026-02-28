@@ -66,7 +66,7 @@ class ToolPricing(BaseModel):
     class Config:
         arbitrary_types_allowed = True
 
-    def calculate_price(self, params: BaseModel) -> float:
+    def calculate_price(self, params: Optional[BaseModel]) -> float:
         """
         Calculate price for given parameters.
 

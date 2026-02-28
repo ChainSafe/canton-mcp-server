@@ -23,6 +23,7 @@ from x402.types import PaymentPayload, PaymentRequirements, SupportedNetworks
 
 from . import tools  # noqa: F401 - Import to trigger tool registration
 from .core import get_registry
+from .core.pricing import PricingType
 from .env import get_env, get_env_bool
 from .websocket_client import FacilitatorWebSocketClient
 
@@ -246,17 +247,23 @@ class PaymentHandler:
             registry = get_registry()
             tool = registry.get_tool(tool_name)
 
-            # Validate arguments with tool's params model
-            validated_params = tool.params_model(**arguments)
+            # For FIXED and FREE pricing, params are not needed
+            if tool.pricing.type in (PricingType.FIXED, PricingType.FREE):
+                return tool.pricing.calculate_price(None)
 
-            # Use Tool.pricing.calculate_price() - single source of truth!
-            calculated_price = tool.pricing.calculate_price(validated_params)
-
-            logger.debug(f"Tool '{tool_name}' price: ${calculated_price:.4f}")
-            return calculated_price
+            # DYNAMIC pricing needs validated params
+            try:
+                validated_params = tool.params_model(**arguments)
+                return tool.pricing.calculate_price(validated_params)
+            except Exception:
+                # Params invalid — fall back to base_price (not $0.01)
+                logger.warning(
+                    f"Param validation failed for '{tool_name}', using base_price ${tool.pricing.base_price}"
+                )
+                return tool.pricing.base_price
 
         except Exception as e:
-            # Tool not found in registry or validation failed
+            # Tool not found in registry
             logger.warning(
                 f"Could not get price for '{tool_name}': {e}, defaulting to $0.01"
             )
