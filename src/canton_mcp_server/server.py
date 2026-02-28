@@ -83,6 +83,7 @@ from canton_mcp_server.canton_billing import (
     verify_transfer_on_chain,
     generate_topology_for_party,
     submit_signed_topology,
+    submit_topology_via_billing_portal,
     is_party_registered,
     CantonBillingError,
 )
@@ -872,10 +873,15 @@ async def request_auth_challenge(request: Request):
                 )
                 if pk_b64:
                     try:
-                        topology_txs = await generate_topology_for_party(party_id, pk_b64)
-                        if topology_txs:
-                            # Store topology txs for submission during verify
-                            _pending_topology[party_id] = topology_txs
+                        result = await generate_topology_for_party(party_id, pk_b64)
+                        if result:
+                            # Store full result for submission during verify
+                            _pending_topology[party_id] = result
+                            # Extract topology_txs from dict (gRPC flow) or use as list (Validator flow)
+                            if isinstance(result, dict):
+                                topology_txs = result["topology_txs"]
+                            else:
+                                topology_txs = result
                             # Return hashes for client to sign
                             response_data["topologyHashes"] = [
                                 tx["hash"] for tx in topology_txs
@@ -947,27 +953,56 @@ async def verify_auth_signature(request: Request):
             and party_id in _pending_topology
         ):
             try:
-                topology_txs = _pending_topology.pop(party_id)
-                if len(topology_signatures) == len(topology_txs):
-                    signed_txs = [
-                        {
-                            "topology_tx": tx["topology_tx"],
-                            "signed_hash": sig,
-                        }
-                        for tx, sig in zip(topology_txs, topology_signatures)
-                    ]
-                    public_key_bytes = get_stored_public_key(party_id)
-                    public_key_b64 = base64.b64encode(public_key_bytes).decode()
-                    party_registered = await submit_signed_topology(
-                        party_id, public_key_b64, signed_txs
-                    )
-                    if party_registered:
-                        logger.info(f"Party registered on-chain: {party_id}")
+                pending = _pending_topology.pop(party_id)
+                public_key_bytes = get_stored_public_key(party_id)
+                public_key_b64 = base64.b64encode(public_key_bytes).decode()
+
+                if isinstance(pending, dict):
+                    # Canton 3.4 gRPC flow via billing portal
+                    topology_txs = pending["topology_txs"]
+                    key_fingerprint = pending.get("key_fingerprint", "")
+                    if len(topology_signatures) == len(topology_txs):
+                        signed_txs = [
+                            {
+                                "topology_tx": tx["topology_tx"],
+                                "signed_hash": sig,
+                            }
+                            for tx, sig in zip(topology_txs, topology_signatures)
+                        ]
+                        # Use the hash from the first tx as originalHash
+                        original_hash = topology_txs[0].get("hash", "") if topology_txs else ""
+                        party_registered = await submit_topology_via_billing_portal(
+                            party_id, public_key_b64, signed_txs,
+                            key_fingerprint, original_hash,
+                        )
+                        if party_registered:
+                            logger.info(f"Party registered on-chain via billing portal: {party_id}")
+                    else:
+                        logger.warning(
+                            f"Topology signature count mismatch: "
+                            f"expected {len(topology_txs)}, got {len(topology_signatures)}"
+                        )
                 else:
-                    logger.warning(
-                        f"Topology signature count mismatch: "
-                        f"expected {len(topology_txs)}, got {len(topology_signatures)}"
-                    )
+                    # Validator API flow (list of topology txs)
+                    topology_txs = pending
+                    if len(topology_signatures) == len(topology_txs):
+                        signed_txs = [
+                            {
+                                "topology_tx": tx["topology_tx"],
+                                "signed_hash": sig,
+                            }
+                            for tx, sig in zip(topology_txs, topology_signatures)
+                        ]
+                        party_registered = await submit_signed_topology(
+                            party_id, public_key_b64, signed_txs
+                        )
+                        if party_registered:
+                            logger.info(f"Party registered on-chain: {party_id}")
+                    else:
+                        logger.warning(
+                            f"Topology signature count mismatch: "
+                            f"expected {len(topology_txs)}, got {len(topology_signatures)}"
+                        )
             except Exception as e:
                 logger.warning(f"Party registration failed (non-blocking): {e}")
 

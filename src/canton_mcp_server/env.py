@@ -114,6 +114,10 @@ ENV_VALUES["VALIDATOR_OAUTH_CLIENT_ID"] = os.getenv("VALIDATOR_OAUTH_CLIENT_ID",
 ENV_VALUES["VALIDATOR_OAUTH_CLIENT_SECRET"] = os.getenv("VALIDATOR_OAUTH_CLIENT_SECRET", "")
 ENV_VALUES["VALIDATOR_OAUTH_AUDIENCE"] = os.getenv("VALIDATOR_OAUTH_AUDIENCE", "")
 
+# Canton 3.4 gRPC Flow via Billing Portal
+ENV_VALUES["USE_CANTON_34_FLOW"] = os.getenv("USE_CANTON_34_FLOW", "false")
+ENV_VALUES["BILLING_PORTAL_URL"] = os.getenv("BILLING_PORTAL_URL", "http://localhost:3050")
+
 
 def get_env(key: str, default: str = "") -> str:
     """

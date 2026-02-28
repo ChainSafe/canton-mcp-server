@@ -20,7 +20,13 @@ from typing import Optional, Set
 
 import httpx
 
+from canton_mcp_server.env import get_env, get_env_bool
+
 logger = logging.getLogger(__name__)
+
+# Canton 3.4 gRPC flow via billing portal
+USE_CANTON_34_FLOW = get_env_bool("USE_CANTON_34_FLOW", False)
+BILLING_PORTAL_URL = get_env("BILLING_PORTAL_URL", "http://localhost:3050")
 
 # Environment configuration
 CANTON_LEDGER_URL = os.getenv("CANTON_LEDGER_URL", "http://localhost:3975")
@@ -164,22 +170,156 @@ async def _get_validator_oauth_token() -> str:
         raise OAuthError(f"Validator OAuth request failed: {e}")
 
 
-async def generate_topology_for_party(
+async def generate_topology_via_billing_portal(
     party_id: str, public_key_b64: str
-) -> Optional[list]:
+) -> Optional[dict]:
     """
-    Generate topology transactions for external party registration.
+    Generate topology transactions via the billing portal's Canton 3.4 gRPC flow.
 
-    Calls the Validator Admin API's topology/generate endpoint.
-    Returns topology transactions that need to be signed by the party's private key.
+    Delegates to the billing portal which has the full gRPC client implementation
+    (protos, grpcio, DER encoding, Canton hashing).
 
     Args:
         party_id: Full Canton party ID (e.g., "test-limit::1220...")
         public_key_b64: Base64-encoded Ed25519 public key
 
     Returns:
-        List of {topology_tx, hash} dicts, or None if party already registered
+        Dict with {topology_txs, key_fingerprint, flow} or None if already registered
     """
+    if party_id in _registered_parties:
+        return None
+
+    logger.info(f"Generating topology via billing portal for party: {party_id}")
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{BILLING_PORTAL_URL}/api/register-party/generate",
+                json={
+                    "partyId": party_id,
+                    "publicKey": public_key_b64,
+                },
+            )
+
+        if response.status_code != 200:
+            error_text = response.text
+            if any(s in error_text for s in [
+                "already exists", "ALREADY_EXISTS",
+                "already registered",
+            ]):
+                _registered_parties.add(party_id)
+                logger.info(f"Party already registered (billing portal): {party_id}")
+                return None
+            raise CantonBillingError(
+                f"Billing portal generate failed: {response.status_code} {error_text}"
+            )
+
+        data = response.json()
+        topology_txs = data.get("topologyTxs", [])
+        if not topology_txs:
+            _registered_parties.add(party_id)
+            logger.info(f"Party already registered (no txs returned): {party_id}")
+            return None
+
+        logger.info(
+            f"Billing portal generated {len(topology_txs)} topology txs for {party_id} "
+            f"(flow: {data.get('flow', 'unknown')})"
+        )
+        return {
+            "topology_txs": topology_txs,
+            "key_fingerprint": data.get("keyFingerprint", ""),
+            "flow": data.get("flow", "canton34"),
+        }
+
+    except CantonBillingError:
+        raise
+    except Exception as e:
+        raise CantonBillingError(f"Billing portal topology generation error: {e}")
+
+
+async def submit_topology_via_billing_portal(
+    party_id: str,
+    public_key_b64: str,
+    signed_topology_txs: list,
+    key_fingerprint: str,
+    original_hash: str,
+) -> bool:
+    """
+    Submit signed topology transactions via the billing portal's Canton 3.4 gRPC flow.
+
+    Args:
+        party_id: Full Canton party ID
+        public_key_b64: Base64-encoded Ed25519 public key
+        signed_topology_txs: List of {topology_tx, signed_hash} dicts
+        key_fingerprint: Key fingerprint from the generate step
+        original_hash: Original hash from the generate step
+
+    Returns:
+        True if party registered successfully
+    """
+    logger.info(f"Submitting {len(signed_topology_txs)} signed topology txs via billing portal for {party_id}")
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{BILLING_PORTAL_URL}/api/register-party/submit",
+                json={
+                    "signedTopologyTxs": signed_topology_txs,
+                    "publicKey": public_key_b64,
+                    "keyFingerprint": key_fingerprint,
+                    "originalHash": original_hash,
+                    "partyId": party_id,
+                },
+            )
+
+        if response.status_code == 200:
+            data = response.json()
+            if data.get("success"):
+                _registered_parties.add(party_id)
+                logger.info(f"Party registered via billing portal gRPC: {party_id}")
+                return True
+            logger.warning(f"Billing portal submit returned success=false: {data}")
+            return False
+
+        error_text = response.text
+        if any(s in error_text for s in [
+            "already exists", "ALREADY_EXISTS",
+            "already registered",
+        ]):
+            _registered_parties.add(party_id)
+            logger.info(f"Party already registered (billing portal submit): {party_id}")
+            return True
+
+        raise CantonBillingError(
+            f"Billing portal submit failed: {response.status_code} {error_text}"
+        )
+
+    except CantonBillingError:
+        raise
+    except Exception as e:
+        raise CantonBillingError(f"Billing portal topology submit error: {e}")
+
+
+async def generate_topology_for_party(
+    party_id: str, public_key_b64: str
+):
+    """
+    Generate topology transactions for external party registration.
+
+    When USE_CANTON_34_FLOW is enabled, delegates to the billing portal which
+    uses Canton 3.4 gRPC. Otherwise, calls the Validator Admin API directly.
+
+    Args:
+        party_id: Full Canton party ID (e.g., "test-limit::1220...")
+        public_key_b64: Base64-encoded Ed25519 public key
+
+    Returns:
+        - Canton 3.4 flow: dict with {topology_txs, key_fingerprint, flow} or None
+        - Validator flow: list of {topology_tx, hash} dicts or None
+    """
+    if USE_CANTON_34_FLOW:
+        return await generate_topology_via_billing_portal(party_id, public_key_b64)
+
     if party_id in _registered_parties:
         return None
 
