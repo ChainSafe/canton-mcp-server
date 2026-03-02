@@ -94,6 +94,12 @@ ENV_VALUES["DCAP_SERVER_NAME"] = os.getenv("DCAP_SERVER_NAME", "Canton MCP Serve
 ENV_VALUES["DCAP_DEFAULT_CALLER"] = os.getenv("DCAP_DEFAULT_CALLER", "unknown-client")
 ENV_VALUES["DCAP_DEFAULT_PAYER"] = os.getenv("DCAP_DEFAULT_PAYER", "0x0000000000000000000000000000000000000000")
 
+# ChromaDB Configuration
+ENV_VALUES["CHROMA_PERSIST_DIR"] = os.getenv(
+    "CHROMA_PERSIST_DIR",
+    str(Path.home() / ".canton-mcp" / "chroma_db"),
+)
+
 # LLM Enrichment Configuration
 ENV_VALUES["ENABLE_LLM_ENRICHMENT"] = os.getenv("ENABLE_LLM_ENRICHMENT", "false")
 ENV_VALUES["ANTHROPIC_API_KEY"] = os.getenv("ANTHROPIC_API_KEY", "")

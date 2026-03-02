@@ -17,6 +17,13 @@ WORKDIR /app
 # Copy dependency files and README (needed by hatchling build)
 COPY pyproject.toml uv.lock README.md ./
 
+# Clone documentation repositories BEFORE copying src/ so source changes
+# don't invalidate this expensive layer (~5 min git clone + indexing)
+RUN mkdir -p /app/docs && \
+    git clone --depth 1 https://github.com/digital-asset/daml.git /app/docs/daml && \
+    git clone --depth 1 https://github.com/digital-asset/canton.git /app/docs/canton && \
+    git clone --depth 1 https://github.com/digital-asset/daml-finance.git /app/docs/daml-finance
+
 # Copy source code (needed for editable install)
 COPY src/ ./src/
 
@@ -29,11 +36,20 @@ RUN uv sync --frozen --no-dev
 # HOME must be explicit so Path.home() resolves to /root under uv
 RUN HOME=/root uv run python -c "from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2; ONNXMiniLM_L6_V2()(['warmup'])"
 
-# Clone documentation repositories
-RUN mkdir -p /app/docs && \
-    git clone --depth 1 https://github.com/digital-asset/daml.git /app/docs/daml && \
-    git clone --depth 1 https://github.com/digital-asset/canton.git /app/docs/canton && \
-    git clone --depth 1 https://github.com/digital-asset/daml-finance.git /app/docs/daml-finance
+# Pre-build ChromaDB index from cloned docs (avoids OOM spike on first request at runtime)
+RUN HOME=/root CANONICAL_DOCS_PATH=/app/docs CHROMA_PERSIST_DIR=/app/chroma_db \
+    OMP_NUM_THREADS=2 TOKENIZERS_PARALLELISM=false \
+    uv run python -c "\
+from canton_mcp_server.core.direct_file_loader import DirectFileResourceLoader; \
+from canton_mcp_server.core.semantic_search import create_semantic_search; \
+from pathlib import Path; \
+loader = DirectFileResourceLoader(Path('/app/docs')); \
+resources = loader.scan_repositories(); \
+all_res = [r for cat in resources.values() for r in cat]; \
+search = create_semantic_search(raw_resources=all_res, force_reindex=True); \
+stats = search.get_stats() if search else {}; \
+print(f'Indexed {stats.get(\"indexed_count\", 0)} resources into /app/chroma_db') \
+"
 
 # Final stage
 FROM python:3.12-slim
@@ -61,6 +77,9 @@ COPY --from=builder --chown=canton:canton /app/docs /app/docs
 
 # Copy pre-downloaded ONNX model from builder (avoids 79MB download at runtime)
 COPY --from=builder --chown=canton:canton /root/.cache/chroma /home/canton/.cache/chroma
+
+# Copy pre-built ChromaDB index from builder (avoids OOM spike on first request)
+COPY --from=builder --chown=canton:canton /app/chroma_db /app/chroma_db
 
 # Copy application code
 COPY --chown=canton:canton pyproject.toml uv.lock README.md ./

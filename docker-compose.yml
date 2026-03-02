@@ -21,6 +21,15 @@ services:
       - IS_ISOLATED_ENVIRONMENT=true
       # Canonical DAML documentation path
       - CANONICAL_DOCS_PATH=/opt/canonical-daml-docs
+      # Use pre-built ChromaDB index from Docker image
+      - CHROMA_PERSIST_DIR=/app/chroma_db
+      # Limit ONNX runtime thread pools (avoids over-allocation on shared hosts)
+      - OMP_NUM_THREADS=2
+      - TOKENIZERS_PARALLELISM=false
+    deploy:
+      resources:
+        limits:
+          memory: 1800M
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:7284/health').read()"]

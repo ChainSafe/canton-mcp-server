@@ -93,11 +93,11 @@ class SafetyChecker:
             logger.info("Initializing semantic search for safety checking...")
             canonical_docs_path = Path(os.environ.get("CANONICAL_DOCS_PATH", "../../canonical-daml-docs"))
             loader = DirectFileResourceLoader(canonical_docs_path)
-            self._raw_resources = loader.scan_repositories(force_refresh=False)
+            raw_by_category = loader.scan_repositories(force_refresh=False)
             
             # Flatten all resources
             all_resources = []
-            for resources in self._raw_resources.values():
+            for resources in raw_by_category.values():
                 all_resources.extend(resources)
             
             logger.info(f"Indexing {len(all_resources)} resources for semantic search...")
@@ -111,6 +111,26 @@ class SafetyChecker:
                 logger.info(f"✅ Semantic search initialized: {stats['indexed_count']} resources indexed")
             else:
                 logger.warning("⚠️ Semantic search unavailable - will skip similarity checks")
+
+            # Strip content from in-memory lookup cache to save RAM
+            self._raw_resources = {
+                category: [
+                    {
+                        "name": r.get("name", ""),
+                        "file_path": r.get("file_path", ""),
+                        "description": r.get("description", ""),
+                        "source_repo": r.get("source_repo", ""),
+                        "source_commit": r.get("source_commit", ""),
+                        "canonical_hash": r.get("canonical_hash", ""),
+                        "similarity_score": 0.0,
+                    }
+                    for r in resources
+                ]
+                for category, resources in raw_by_category.items()
+            }
+
+            # Free full-content dicts now that we've extracted lightweight metadata
+            del raw_by_category
 
     async def _check_safety_with_llm(
         self,

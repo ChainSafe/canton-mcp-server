@@ -46,6 +46,10 @@ BILLING_PACKAGE_ID = os.getenv(
     "1cdb79cf535e8fdd0b1ae677ddf7a534f6d343a1a8811b88cf19e00ffbcef2c0"
 )
 
+# Self-signed JWT mode for localnet (Canton uses unsafe-jwt-hmac-256)
+CANTON_LEDGER_AUTH_MODE = os.getenv("CANTON_LEDGER_AUTH_MODE", "oauth")
+CANTON_LEDGER_JWT_SECRET = os.getenv("CANTON_LEDGER_JWT_SECRET", "")
+
 # Token cache
 _token_cache: dict = {"token": None, "expires_at": 0}
 
@@ -438,7 +442,10 @@ async def get_oauth_token() -> str:
     """
     Get OAuth2 access token for Canton JSON API.
 
-    Uses client_credentials flow with Keycloak.
+    Supports two modes:
+    - "self-signed": Generate HS256 JWT locally (for localnet with unsafe-jwt-hmac-256)
+    - "oauth" (default): client_credentials flow with Keycloak/Auth0
+
     Tokens are cached until near expiry.
     """
     global _token_cache
@@ -446,6 +453,26 @@ async def get_oauth_token() -> str:
     # Check cache
     if _token_cache["token"] and time.time() < _token_cache["expires_at"] - 60:
         return _token_cache["token"]
+
+    # Self-signed JWT for localnet (Canton uses unsafe-jwt-hmac-256)
+    if CANTON_LEDGER_AUTH_MODE == "self-signed":
+        import jwt
+
+        if not CANTON_LEDGER_JWT_SECRET:
+            raise OAuthError("CANTON_LEDGER_JWT_SECRET not configured for self-signed mode")
+
+        now = int(time.time())
+        expires_in = 300  # 5 minutes
+        payload = {
+            "sub": CANTON_USER_ID or "ledger-api-user",
+            "aud": CANTON_OAUTH_AUDIENCE or "https://canton.network.global",
+            "iat": now,
+            "exp": now + expires_in,
+        }
+        token = jwt.encode(payload, CANTON_LEDGER_JWT_SECRET, algorithm="HS256")
+        _token_cache = {"token": token, "expires_at": now + expires_in}
+        logger.info(f"Self-signed JWT generated (sub={payload['sub']}, aud={payload['aud']}, expires_in={expires_in}s)")
+        return token
 
     if not CANTON_OAUTH_CLIENT_SECRET:
         raise OAuthError("CANTON_OAUTH_CLIENT_SECRET not configured")

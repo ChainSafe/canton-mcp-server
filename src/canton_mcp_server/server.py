@@ -512,21 +512,20 @@ After top-up, return to Cursor and your tools will work again.
         if payment_handler.canton_enabled and party_id:
             try:
                 price_cc = payment_handler.get_tool_price(tool_name, arguments)
-                if price_cc > 0.0:  # Only charge for paid tools
-                    # Create ChargeReceipt on Canton (fire-and-forget)
-                    async def create_charge():
-                        try:
-                            charge_contract_id = await create_charge_receipt(
-                                user_party=party_id,
-                                tool=tool_name,
-                                amount=price_cc,
-                                request_id=str(mcp_request.id),
-                            )
-                            logger.info(f"💳 ChargeReceipt created (streaming): {charge_contract_id}")
-                        except Exception as e:
-                            logger.error(f"Failed to create ChargeReceipt: {e}")
-                    asyncio.create_task(create_charge())
-                    logger.info(f"💳 Creating ChargeReceipt (streaming): {tool_name} - {price_cc} CC from {party_id}")
+                # Create ChargeReceipt for ALL calls (even free-tier $0) so the call counter tracks usage
+                async def create_charge():
+                    try:
+                        charge_contract_id = await create_charge_receipt(
+                            user_party=party_id,
+                            tool=tool_name,
+                            amount=price_cc,
+                            request_id=str(mcp_request.id),
+                        )
+                        logger.info(f"💳 ChargeReceipt created (streaming): {charge_contract_id}")
+                    except Exception as e:
+                        logger.error(f"Failed to create ChargeReceipt: {e}")
+                asyncio.create_task(create_charge())
+                logger.info(f"💳 Creating ChargeReceipt (streaming): {tool_name} - {price_cc} CC from {party_id}")
             except Exception as e:
                 logger.error(f"Failed to create ChargeReceipt: {e}")
 
@@ -566,15 +565,14 @@ After top-up, return to Cursor and your tools will work again.
         if payment_handler.canton_enabled and party_id:
             try:
                 price_cc = payment_handler.get_tool_price(tool_name, arguments)
-                if price_cc > 0.0:  # Only charge for paid tools
-                    # Create ChargeReceipt contract on Canton
-                    charge_contract_id = await create_charge_receipt(
-                        user_party=party_id,
-                        tool=tool_name,
-                        amount=price_cc,
-                        request_id=str(mcp_request.id),
-                    )
-                    logger.info(f"💳 ChargeReceipt created on-chain: {tool_name} - {price_cc} CC from {party_id} (contract: {charge_contract_id})")
+                # Create ChargeReceipt for ALL calls (even free-tier $0) so the call counter tracks usage
+                charge_contract_id = await create_charge_receipt(
+                    user_party=party_id,
+                    tool=tool_name,
+                    amount=price_cc,
+                    request_id=str(mcp_request.id),
+                )
+                logger.info(f"💳 ChargeReceipt created on-chain: {tool_name} - {price_cc} CC from {party_id} (contract: {charge_contract_id})")
             except Exception as e:
                 logger.error(f"Failed to create ChargeReceipt: {e}")
 

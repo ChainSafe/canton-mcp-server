@@ -12,11 +12,18 @@ Architecture:
 """
 
 import hashlib
+import json
 import logging
+import os
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 logger = logging.getLogger(__name__)
+
+def _default_persist_dir() -> str:
+    """Stable persist directory that doesn't change with CWD."""
+    from ..env import get_env
+    return get_env("CHROMA_PERSIST_DIR", str(Path.home() / ".canton-mcp" / "chroma_db"))
 
 try:
     import chromadb
@@ -62,9 +69,11 @@ class DAMLSemanticSearch:
         
         self.collection_name = collection_name
         
-        # Set up persist directory
+        # Set up persist directory (stable absolute path, not CWD-relative)
         if persist_directory is None:
-            persist_directory = str(Path.cwd() / ".chroma_db")
+            persist_directory = _default_persist_dir()
+        
+        Path(persist_directory).mkdir(parents=True, exist_ok=True)
         
         # Initialize ChromaDB client with persistence
         self.client = chromadb.PersistentClient(
@@ -84,6 +93,20 @@ class DAMLSemanticSearch:
         
         logger.info(f"✅ ChromaDB collection '{collection_name}' initialized ({self.collection.count()} items)")
     
+    def _get_commit_hash_fingerprint(self, raw_resources: List[Dict[str, Any]]) -> str:
+        """
+        Compute a fingerprint from the source commit hashes in the resource list.
+        This lets us detect when the repos have changed without counting documents.
+        """
+        commits = {}
+        for r in raw_resources:
+            repo = r.get("source_repo", "")
+            commit = r.get("source_commit", "")
+            if repo and commit:
+                commits[repo] = commit
+        fingerprint = json.dumps(commits, sort_keys=True)
+        return hashlib.sha1(fingerprint.encode()).hexdigest()[:16]
+
     def index_resources(
         self,
         raw_resources: List[Dict[str, Any]],
@@ -123,26 +146,49 @@ class DAMLSemanticSearch:
             logger.warning("No resources found to index")
             return 0
         
-        # Check if we need to reindex
         current_count = self.collection.count()
         expected_count = len(resources_to_index)
-        
-        # Allow small differences (duplicates, failed indexing, etc.)
-        # If within 1% or 50 items, consider it up-to-date
-        count_diff = abs(current_count - expected_count)
-        tolerance = max(50, int(expected_count * 0.01))
-        
-        if not force_reindex and count_diff <= tolerance:
-            logger.info(f"✅ Index up-to-date ({current_count} resources, diff: {count_diff})")
-            return current_count
-        
-        # Clear existing index if forcing reindex
-        if force_reindex and current_count > 0:
+
+        if not force_reindex:
+            # Primary check: commit-hash fingerprint stored in collection metadata
+            new_fingerprint = self._get_commit_hash_fingerprint(resources_to_index)
+            stored_fingerprint = self.collection.metadata.get("commit_fingerprint", "")
+            
+            if stored_fingerprint and stored_fingerprint == new_fingerprint and current_count > 0:
+                logger.info(
+                    f"✅ Index up-to-date (commit fingerprint match, {current_count} resources)"
+                )
+                return current_count
+
+            # Fallback: count-based check (handles first run after path migration)
+            count_diff = abs(current_count - expected_count)
+            tolerance = max(50, int(expected_count * 0.01))
+            if count_diff <= tolerance and current_count > 0:
+                logger.info(f"✅ Index up-to-date ({current_count} resources, diff: {count_diff})")
+                return current_count
+
+        # Clear existing index before reindexing
+        if current_count > 0:
             logger.info(f"🔄 Clearing existing index ({current_count} items)")
+            self.client.delete_collection(self.collection_name)
+            new_fingerprint = self._get_commit_hash_fingerprint(resources_to_index)
+            self.collection = self.client.create_collection(
+                name=self.collection_name,
+                metadata={
+                    "description": "DAML semantic search (all resources)",
+                    "commit_fingerprint": new_fingerprint,
+                },
+            )
+        elif not force_reindex:
+            # Collection is empty (fresh start) — set fingerprint now so we can skip next time
+            new_fingerprint = self._get_commit_hash_fingerprint(resources_to_index)
             self.client.delete_collection(self.collection_name)
             self.collection = self.client.create_collection(
                 name=self.collection_name,
-                metadata={"description": "DAML semantic search (all resources)"},
+                metadata={
+                    "description": "DAML semantic search (all resources)",
+                    "commit_fingerprint": new_fingerprint,
+                },
             )
         
         # Prepare documents for indexing

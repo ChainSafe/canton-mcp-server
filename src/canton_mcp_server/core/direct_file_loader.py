@@ -113,10 +113,13 @@ class DirectFileResourceLoader:
         # Binary file extensions (filter out)
         self.binary_extensions = {
             ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico",  # Images
-            ".pdf", ".zip", ".tar", ".gz", ".rar",            # Archives
-            ".exe", ".dll", ".so", ".dylib",                   # Binaries
+            ".pdf", ".zip", ".tar", ".gz", ".rar", ".bz2", ".xz",  # Archives
+            ".exe", ".dll", ".so", ".dylib", ".bin",           # Binaries
             ".dar", ".jar", ".war", ".ear",                    # Java archives
             ".class", ".o", ".obj", ".a",                      # Compiled files
+            ".dalf", ".hi", ".hie",                            # DAML/Haskell compiled
+            ".pb", ".pem", ".key", ".crt", ".der", ".p12",    # Certs/protobuf
+            ".wasm", ".pyc", ".pyo",                           # Other compiled
         }
     
     def scan_repositories(self, force_refresh: bool = False) -> Dict[str, List[Dict[str, Any]]]:
@@ -211,8 +214,8 @@ class DirectFileResourceLoader:
             # Get current commit hash
             commit_hash = self._get_current_commit_hash(repo_path)
             if not commit_hash:
-                logger.error(f"Could not get commit hash for {repo_name}")
-                return resources
+                logger.warning(f"Could not get commit hash for {repo_name} — scanning without git verification")
+                commit_hash = "unknown"
             
             # Scan for documentation files (skip .git directory)
             for file_path in repo_path.rglob("*"):
@@ -269,8 +272,9 @@ class DirectFileResourceLoader:
             if filename in {"makefile", "dockerfile", "docker-compose", "sphinx", "conf"}:
                 return False
         
-        # Default: allow files without clear build indicators
-        return True
+        # Default: reject files with unknown extensions (deny-by-default)
+        # Only explicitly allowed extensions (doc_extensions) are accepted
+        return False
     
     def _create_file_resource(self, file_path: Path, repo_path: Path, repo_name: str, commit_hash: str) -> Optional[Dict[str, Any]]:
         """
@@ -290,11 +294,14 @@ class DirectFileResourceLoader:
             relative_path = file_path.relative_to(repo_path)
             relative_path_str = str(relative_path)
             
-            # Get Git blob hash for verification
-            blob_hash = self._get_git_blob_hash(repo_path, commit_hash, relative_path_str)
-            if not blob_hash:
-                logger.warning(f"Could not get blob hash for {relative_path_str}")
-                return None
+            # Get Git blob hash for verification (skip when no git repo)
+            if commit_hash == "unknown":
+                blob_hash = None
+            else:
+                blob_hash = self._get_git_blob_hash(repo_path, commit_hash, relative_path_str)
+                if not blob_hash:
+                    logger.warning(f"Could not get blob hash for {relative_path_str}")
+                    return None
             
             # Read file content
             try:

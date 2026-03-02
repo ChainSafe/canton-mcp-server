@@ -1,0 +1,7 @@
+# Override to use local Canton quickstart — run with:
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+services:
+  canton-mcp-server:
+    env_file:
+      - path: .env.canton.local
+        required: true

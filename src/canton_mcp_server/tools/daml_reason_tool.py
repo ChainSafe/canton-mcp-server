@@ -42,14 +42,23 @@ class DamlReasonParams(MCPModel):
     business_intent: str = Field(
         description="What the developer wants to achieve with this DAML code"
     )
+    query: Optional[str] = Field(
+        default=None,
+        description="The user's actual question or search query. Used for ChromaDB search when available."
+    )
 
     @model_validator(mode="before")
     @classmethod
     def accept_query_alias(cls, data: dict) -> dict:
-        """Accept 'query' as an alias for 'businessIntent'/'business_intent'."""
+        """Accept 'query' as an alias for 'businessIntent'/'business_intent'.
+
+        If both 'query' and 'businessIntent' are provided, keep query as a
+        separate field and use businessIntent for business_intent.
+        If only 'query' is provided, copy it to business_intent.
+        """
         if isinstance(data, dict):
             if "business_intent" not in data and "businessIntent" not in data:
-                query = data.pop("query", None)
+                query = data.get("query")
                 if query:
                     data["business_intent"] = query
         return data
@@ -72,7 +81,7 @@ class DamlReasonResult(MCPModel):
     """Result from DAML Reason analysis"""
 
     action: str = Field(
-        description="Action type: 'approved', 'suggest_patterns', 'suggest_edits', 'delegate', 'compile_needed'"
+        description="Action type: 'approved', 'suggest_patterns', 'suggest_edits', 'delegate'"
     )
     
     # Validation results (when action='approved' or 'suggest_edits')
@@ -149,26 +158,61 @@ class DamlReasonTool(Tool[DamlReasonParams, DamlReasonResult]):
             logger.info("🔍 Initializing semantic search...")
             
             # Load raw resources directly from repos (no enrichment, no caching)
-            self._raw_resources = self.loader.scan_repositories(force_refresh=False)
+            raw_by_category = self.loader.scan_repositories(force_refresh=False)
             
             # Flatten all resources into a single list
             all_resources = []
-            for category, resources in self._raw_resources.items():
+            for category, resources in raw_by_category.items():
                 all_resources.extend(resources)
             
             logger.info(f"📚 Loaded {len(all_resources)} raw resources from canonical repos")
-            
+
+            if not all_resources:
+                logger.info("📦 No resources from file scan — will use pre-built ChromaDB index if available")
+
             # Initialize ChromaDB semantic search (indexes raw content directly)
             self._semantic_search = create_semantic_search(
                 raw_resources=all_resources,
                 force_reindex=False  # Persist across restarts
             )
-            
+
             if self._semantic_search:
                 stats = self._semantic_search.get_stats()
-                logger.info(f"✅ Semantic search ready: {stats['indexed_count']} resources indexed")
+                count = stats['indexed_count']
+                if count > 0 and not all_resources:
+                    logger.info(f"✅ Using pre-built ChromaDB index: {count} resources")
+                elif count > 0:
+                    logger.info(f"✅ Semantic search ready: {count} resources indexed")
+                else:
+                    logger.warning("⚠️ ChromaDB index is empty — daml_reason will return 0 patterns")
             else:
                 logger.warning("⚠️ Semantic search unavailable - falling back to basic recommendations")
+
+            # Keep only lightweight metadata for search result lookups — drop full file
+            # content from memory. Search results only need name, file_path, description.
+            # On a 2GB box this saves ~100-200MB of Python object overhead.
+            self._raw_resources = {
+                category: [
+                    {
+                        "name": r.get("name", ""),
+                        "file_path": r.get("file_path", ""),
+                        "description": r.get("description", ""),
+                        "source_repo": r.get("source_repo", ""),
+                        "source_commit": r.get("source_commit", ""),
+                        "canonical_hash": r.get("canonical_hash", ""),
+                        "similarity_score": 0.0,
+                    }
+                    for r in resources
+                ]
+                for category, resources in raw_by_category.items()
+            }
+
+            # Free the loader's in-memory cache — full content is no longer needed
+            self.loader._cached_resources = {}
+
+            # Share with SafetyChecker so it doesn't create its own loader + ChromaDB copy
+            self.safety_checker.semantic_search = self._semantic_search
+            self.safety_checker._raw_resources = self._raw_resources
 
     async def execute(
         self, ctx: ToolContext[DamlReasonParams, DamlReasonResult]
@@ -185,14 +229,16 @@ class DamlReasonTool(Tool[DamlReasonParams, DamlReasonResult]):
         """
         business_intent = ctx.params.business_intent
         daml_code = ctx.params.daml_code
+        # Use query for ChromaDB search if available, fall back to business_intent
+        search_text = ctx.params.query or business_intent
 
         # CASE 1: No code provided - just recommend patterns
         if not daml_code or daml_code.strip() == "":
-            logger.info(f"No code provided, finding similar patterns for: {business_intent}")
-            
+            logger.info(f"No code provided, finding similar patterns for: {search_text}")
+
             # Initialize semantic search
             self._ensure_semantic_search()
-            
+
             if self._semantic_search is None:
                 yield ctx.structured(DamlReasonResult(
                     action="suggest_patterns",
@@ -202,14 +248,14 @@ class DamlReasonTool(Tool[DamlReasonParams, DamlReasonResult]):
                     reasoning="Semantic search unavailable - please provide DAML code for validation"
                 ))
                 return
-            
-            # Use business intent as search query to find similar examples
+
+            # Use search_text (query preferred) for ChromaDB similarity search
             similar_files = self._semantic_search.search_similar_files(
-                code=business_intent,
+                code=search_text,
                 top_k=5,
                 raw_resources=[r for resources in self._raw_resources.values() for r in resources]
             )
-            
+
             # Format recommendations (raw files, no enrichment)
             formatted_patterns = []
             for file in similar_files:
@@ -219,73 +265,40 @@ class DamlReasonTool(Tool[DamlReasonParams, DamlReasonResult]):
                     "score": file.get("similarity_score", 0.0),
                     "description": file.get("description", "")[:200]  # First 200 chars
                 })
-            
-            yield ctx.structured(DamlReasonResult(
-                action="suggest_patterns",
-                valid=False,
-                business_intent=business_intent,
-                recommended_patterns=formatted_patterns,
-                reasoning=f"Found {len(formatted_patterns)} similar patterns using semantic search. Review these examples for your use case."
-            ))
+
+            # Synthesize a natural language answer using LLM (only when enrichment is enabled)
+            from ..env import get_env, get_env_bool
+            api_key = get_env("ANTHROPIC_API_KEY", "")
+            if api_key and similar_files and get_env_bool("ENABLE_LLM_ENRICHMENT", False):
+                logger.info(f"Synthesizing answer for query: {search_text}")
+                llm_answer = await self._synthesize_answer(search_text, similar_files, api_key)
+                yield ctx.structured(DamlReasonResult(
+                    action="suggest_patterns",
+                    valid=True,
+                    confidence=0.8,
+                    llm_insights=llm_answer,
+                    business_intent=business_intent,
+                    recommended_patterns=formatted_patterns,
+                    reasoning=f"Answered using {len(formatted_patterns)} relevant documentation sources."
+                ))
+            else:
+                # Fallback: return raw results (no API key or no results)
+                yield ctx.structured(DamlReasonResult(
+                    action="suggest_patterns",
+                    valid=False,
+                    business_intent=business_intent,
+                    recommended_patterns=formatted_patterns,
+                    reasoning=f"Found {len(formatted_patterns)} similar patterns using semantic search. Review these examples for your use case."
+                ))
             return
 
-        # CASE 2: Code provided - check if we have compilation results
+        # CASE 2: Code provided - run safety check (with compilation context if available)
         logger.info(f"Validating DAML code for: {business_intent}")
-        
-        # CASE 2a: No compilation result - return similarity search and request compilation
-        if ctx.params.compilation_result is None:
-            logger.info("No compilation result provided - returning similarity search + compilation request")
-            
-            # Initialize semantic search
-            self._ensure_semantic_search()
-            
-            # Run similarity search
-            similar_files = []
-            if self._semantic_search and self._raw_resources:
-                similar_files = self._semantic_search.search_similar_files(
-                    code=daml_code,
-                    top_k=5,
-                    raw_resources=[r for resources in self._raw_resources.values() for r in resources]
-                )
-            
-            # Format recommendations
-            formatted_patterns = []
-            for file in similar_files[:5]:
-                formatted_patterns.append({
-                    "name": file.get("name", "Unknown"),
-                    "path": file.get("file_path", "Unknown"),
-                    "score": file.get("similarity_score", 0.0),
-                    "description": file.get("description", "")[:200]
-                })
-            
-            yield ctx.structured(DamlReasonResult(
-                action="compile_needed",
-                valid=False,
-                confidence=0.0,
-                issues=[],
-                suggestions=["Compile code locally to enable full analysis"],
-                business_intent=business_intent,
-                recommended_patterns=formatted_patterns,
-                compilation_skipped=True,
-                compilation_instructions="""To enable full LLM analysis with authorization checking:
 
-1. **Compile locally:**
-   ```bash
-   cd /path/to/your/project
-   daml build
-   ```
-
-2. **Send back the compilation result** by calling this tool again with the `compilation_result` parameter.
-
-3. **If compilation fails**, send the error output - the LLM can analyze errors too.
-
-**Meanwhile**, here are similar patterns from canonical repositories that might help.""",
-                reasoning=f"Similarity search complete ({len(formatted_patterns)} patterns found). Compilation needed for full analysis with authorization checking."
-            ))
-            return
-        
-        # CASE 2b: Compilation result provided - run full analysis
-        logger.info("Compilation result provided - running full analysis with LLM")
+        if ctx.params.compilation_result:
+            logger.info("Compilation result provided - running full analysis with LLM")
+        else:
+            logger.info("No compilation result - running semantic analysis")
         
         # Run Gate 1 safety check with compilation context
         module_name = self._extract_module_name(daml_code) or "Main"
@@ -445,6 +458,66 @@ This will provide specific line-by-line errors that can help identify the issues
                      f"{'(LLM-based analysis without compilation) ' if safety_result.compilation_skipped else ''}"
                      f"Found {len(formatted_patterns)} similar patterns that might help fix the issues."
         ))
+
+    async def _synthesize_answer(
+        self,
+        query: str,
+        similar_files: list,
+        api_key: str,
+    ) -> str:
+        """Call Claude Haiku to synthesize a natural language answer from ChromaDB results.
+
+        Uses the same pattern as SafetyChecker._check_safety_with_llm().
+        """
+        import asyncio
+
+        try:
+            from anthropic import Anthropic
+            llm_client = Anthropic(api_key=api_key)
+
+            # Build context from similar files
+            context_parts = []
+            for i, f in enumerate(similar_files[:5], 1):
+                name = f.get("name", "unknown")
+                path = f.get("file_path", "unknown")
+                score = f.get("similarity_score", 0.0)
+                desc = f.get("description", "")[:500]
+                content = f.get("content", "")[:2000]
+                entry = f"### Source {i}: {name}\nPath: {path}\nRelevance: {score:.3f}\nDescription: {desc}"
+                if content:
+                    entry += f"\nContent:\n```\n{content}\n```"
+                context_parts.append(entry)
+
+            context = "\n\n".join(context_parts)
+
+            response = await asyncio.to_thread(
+                llm_client.messages.create,
+                model="claude-3-5-haiku-20241022",
+                max_tokens=1500,
+                messages=[{
+                    "role": "user",
+                    "content": f"""You are a DAML expert assistant. Answer the user's question using the documentation excerpts below.
+
+USER'S QUESTION:
+{query}
+
+RELEVANT DOCUMENTATION:
+{context}
+
+Instructions:
+- Give a clear, helpful answer to the question
+- Reference specific documentation sources when relevant
+- If the documentation doesn't fully answer the question, say so and provide what you can
+- Use code examples from the sources when helpful
+- Be concise but thorough"""
+                }]
+            )
+
+            return response.content[0].text
+
+        except Exception as e:
+            logger.error(f"LLM synthesis failed: {e}")
+            return f"Could not synthesize answer: {e}. Raw results are included in recommended_patterns."
 
     def _extract_module_name(self, daml_code: str) -> Optional[str]:
         """Extract module name from DAML code"""
