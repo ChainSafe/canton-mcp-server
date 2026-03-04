@@ -99,6 +99,7 @@ ENV_VALUES["CHROMA_PERSIST_DIR"] = os.getenv(
     "CHROMA_PERSIST_DIR",
     str(Path.home() / ".canton-mcp" / "chroma_db"),
 )
+ENV_VALUES["EMBEDDING_DEVICE"] = os.getenv("EMBEDDING_DEVICE", "cpu")
 
 # LLM Enrichment Configuration
 ENV_VALUES["ENABLE_LLM_ENRICHMENT"] = os.getenv("ENABLE_LLM_ENRICHMENT", "false")

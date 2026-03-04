@@ -1,0 +1,27 @@
+# GPU override for mainnet — run with:
+#   docker compose -f docker-compose.yml -f docker-compose.mainnet.yml up -d
+services:
+  canton-mcp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    env_file:
+      - path: .env.canton
+        required: true
+    # Override base compose: docs are baked into the image at /app/docs,
+    # no host volume mounts needed
+    volumes: []
+    environment:
+      - IS_ISOLATED_ENVIRONMENT=true
+      - CANONICAL_DOCS_PATH=/app/docs
+      - CHROMA_PERSIST_DIR=/app/chroma_db
+      - OMP_NUM_THREADS=2
+      - TOKENIZERS_PARALLELISM=false
+      - EMBEDDING_DEVICE=cuda
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

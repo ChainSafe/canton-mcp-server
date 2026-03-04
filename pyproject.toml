@@ -35,6 +35,12 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 
+[project.optional-dependencies]
+gpu = [
+    "sentence-transformers>=2.2.0",
+    "torch>=2.0.0",
+]
+
 [project.urls]
 Homepage = "https://github.com/empea-careercriminal/canton-mcp-server"
 Repository = "https://github.com/empea-careercriminal/canton-mcp-server"

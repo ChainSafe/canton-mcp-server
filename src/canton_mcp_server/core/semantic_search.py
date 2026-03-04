@@ -24,6 +24,45 @@ def _default_persist_dir() -> str:
     from ..env import get_env
     return get_env("CHROMA_PERSIST_DIR", str(Path.home() / ".canton-mcp" / "chroma_db"))
 
+
+def _get_embedding_function():
+    """Return an embedding function based on the EMBEDDING_DEVICE env var.
+
+    - "cuda": SentenceTransformerEmbeddingFunction on GPU (~55x faster on T4)
+    - "cpu" (default): ONNXMiniLM_L6_V2 on CPU
+
+    Note: ONNX and SentenceTransformer produce numerically different embeddings,
+    so switching backends triggers an automatic re-index of the ChromaDB collection.
+    """
+    from ..env import get_env
+    device = get_env("EMBEDDING_DEVICE", "cpu").lower()
+    if device == "cuda":
+        import torch
+        if torch.cuda.is_available():
+            gpu_name = torch.cuda.get_device_name(0)
+            test_tensor = torch.zeros(1, device="cuda")
+            logger.info(f"CUDA verified: {gpu_name}, {torch.cuda.memory_allocated()/1024/1024:.1f}MB allocated")
+            del test_tensor
+        else:
+            logger.warning("EMBEDDING_DEVICE=cuda but CUDA unavailable, falling back to CPU ONNX")
+            from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2
+            return ONNXMiniLM_L6_V2(preferred_providers=["CPUExecutionProvider"])
+
+        from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+        logger.info("Using SentenceTransformer embeddings on CUDA GPU")
+        return SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2", device="cuda")
+    else:
+        from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2
+        logger.info("Using ONNX MiniLM embeddings on CPU")
+        return ONNXMiniLM_L6_V2(preferred_providers=["CPUExecutionProvider"])
+
+
+def _get_embedding_backend_label() -> str:
+    """Return a label identifying the current embedding backend."""
+    from ..env import get_env
+    device = get_env("EMBEDDING_DEVICE", "cpu").lower()
+    return "st-cuda" if device == "cuda" else "onnx-cpu"
+
 try:
     import chromadb
     from chromadb.config import Settings
@@ -65,15 +104,15 @@ class DAMLSemanticSearch:
         """
         if not CHROMADB_AVAILABLE:
             raise ImportError("ChromaDB is required for semantic search. Install with: pip install chromadb")
-        
+
         self.collection_name = collection_name
-        
+
         # Set up persist directory (stable absolute path, not CWD-relative)
         if persist_directory is None:
             persist_directory = _default_persist_dir()
-        
+
         Path(persist_directory).mkdir(parents=True, exist_ok=True)
-        
+
         # Initialize ChromaDB client with persistence
         self.client = chromadb.PersistentClient(
             path=persist_directory,
@@ -82,15 +121,42 @@ class DAMLSemanticSearch:
                 allow_reset=True,
             )
         )
-        
-        # Get or create collection
+
+        # Resolve embedding function: explicit arg > env-var-based default
+        if embedding_function is None:
+            embedding_function = _get_embedding_function()
+        self._embedding_function = embedding_function
+        self._backend_label = _get_embedding_backend_label()
+
+        # Check if an existing collection uses a different embedding backend.
+        # ChromaDB rejects get_or_create_collection when the persisted embedding
+        # function differs from the new one, so we must delete first.
+        try:
+            existing = self.client.get_collection(name=collection_name)
+            stored_backend = existing.metadata.get("embedding_backend", "")
+            if stored_backend and stored_backend != self._backend_label:
+                logger.warning(
+                    f"Embedding backend changed: {stored_backend} → {self._backend_label}. "
+                    f"Deleting old collection ({existing.count()} items) for re-index."
+                )
+                self.client.delete_collection(collection_name)
+        except Exception:
+            pass  # Collection doesn't exist yet — that's fine
+
+        # Get or create collection with the current embedding function
         self.collection = self.client.get_or_create_collection(
             name=collection_name,
-            metadata={"description": "DAML semantic search - all resources (examples, docs, patterns)"},
-            embedding_function=embedding_function,
+            metadata={
+                "description": "DAML semantic search - all resources (examples, docs, patterns)",
+                "embedding_backend": self._backend_label,
+            },
+            embedding_function=self._embedding_function,
         )
-        
-        logger.info(f"✅ ChromaDB collection '{collection_name}' initialized ({self.collection.count()} items)")
+
+        logger.info(
+            f"✅ ChromaDB collection '{collection_name}' initialized "
+            f"({self.collection.count()} items, backend: {self._backend_label})"
+        )
     
     def _get_commit_hash_fingerprint(self, raw_resources: List[Dict[str, Any]]) -> str:
         """
@@ -176,7 +242,9 @@ class DAMLSemanticSearch:
                 metadata={
                     "description": "DAML semantic search (all resources)",
                     "commit_fingerprint": new_fingerprint,
+                    "embedding_backend": self._backend_label,
                 },
+                embedding_function=self._embedding_function,
             )
         elif not force_reindex:
             # Collection is empty (fresh start) — set fingerprint now so we can skip next time
@@ -187,7 +255,9 @@ class DAMLSemanticSearch:
                 metadata={
                     "description": "DAML semantic search (all resources)",
                     "commit_fingerprint": new_fingerprint,
+                    "embedding_backend": self._backend_label,
                 },
+                embedding_function=self._embedding_function,
             )
         
         # Prepare documents for indexing
