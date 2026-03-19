@@ -47,7 +47,7 @@ def camel_to_snake(camel_str: str) -> str:
 
 
 def convert_keys_to_camel_case(obj: Any, exclude_null: bool = True) -> Any:
-    """Recursively convert all dictionary keys from snake_case to camelCase
+    """Iteratively convert all dictionary keys from snake_case to camelCase
 
     Args:
         obj: Object to convert (dict, list, or primitive)
@@ -56,26 +56,63 @@ def convert_keys_to_camel_case(obj: Any, exclude_null: bool = True) -> Any:
     Returns:
         Object with camelCase keys and optionally filtered null values
     """
-    if isinstance(obj, dict):
-        result = {}
-        for key, value in obj.items():
-            # Skip null/None values if exclude_null is True
-            if exclude_null and value is None:
-                continue
-            result[snake_to_camel(key)] = convert_keys_to_camel_case(
-                value, exclude_null
-            )
-        return result
-    elif isinstance(obj, list):
-        return [convert_keys_to_camel_case(item, exclude_null) for item in obj]
-    else:
+    # Use an explicit stack to avoid deep recursion in async contexts
+    # Each stack entry is (source, target_container, key_or_index)
+    # We process the root and build the result iteratively.
+    if not isinstance(obj, (dict, list)):
         return obj
+
+    # Sentinel to identify unprocessed values
+    _UNSET = object()
+
+    # We'll use a work stack: each item is (value_to_process, parent, key)
+    # After processing, we set parent[key] = converted_value
+    root: Any = _UNSET
+    # Stack items: (value, parent_ref, key_in_parent)
+    stack: list[tuple[Any, Any, Any]] = [(obj, None, None)]
+
+    while stack:
+        current, parent, key = stack.pop()
+
+        if isinstance(current, dict):
+            result = {}
+            # Place result in parent immediately so children can reference it
+            if parent is None:
+                root = result
+            else:
+                parent[key] = result
+            for k, v in current.items():
+                if exclude_null and v is None:
+                    continue
+                camel_key = snake_to_camel(k)
+                if isinstance(v, (dict, list)):
+                    stack.append((v, result, camel_key))
+                else:
+                    result[camel_key] = v
+        elif isinstance(current, list):
+            result_list: list[Any] = [None] * len(current)
+            if parent is None:
+                root = result_list
+            else:
+                parent[key] = result_list
+            for i, item in enumerate(current):
+                if isinstance(item, (dict, list)):
+                    stack.append((item, result_list, i))
+                else:
+                    result_list[i] = item
+        else:
+            if parent is None:
+                root = current
+            else:
+                parent[key] = current
+
+    return root
 
 
 def convert_keys_to_snake_case(
     obj: Any, exclude_paths: list[str] | None = None, _current_path: str = ""
 ) -> Any:
-    """Recursively convert all dictionary keys from camelCase to snake_case
+    """Iteratively convert all dictionary keys from camelCase to snake_case
 
     Args:
         obj: Object to convert (dict, list, or primitive)
@@ -89,27 +126,50 @@ def convert_keys_to_snake_case(
     if exclude_paths is None:
         exclude_paths = []
 
-    if isinstance(obj, dict):
-        result = {}
-        for key, value in obj.items():
-            snake_key = camel_to_snake(key)
-            new_path = f"{_current_path}.{snake_key}" if _current_path else snake_key
-
-            # Check if this path should be excluded from conversion
-            if new_path in exclude_paths:
-                # Keep original value without recursing (preserves internal structure)
-                result[snake_key] = value
-            else:
-                # Recurse with conversion
-                result[snake_key] = convert_keys_to_snake_case(
-                    value, exclude_paths, new_path
-                )
-        return result
-    elif isinstance(obj, list):
-        return [
-            convert_keys_to_snake_case(item, exclude_paths, _current_path)
-            for item in obj
-        ]
-    else:
+    if not isinstance(obj, (dict, list)):
         return obj
 
+    exclude_set = set(exclude_paths)
+
+    root: Any = None
+    # Stack items: (value, parent_ref, key_in_parent, current_path)
+    stack: list[tuple[Any, Any, Any, str]] = [(obj, None, None, _current_path)]
+
+    while stack:
+        current, parent, key, path = stack.pop()
+
+        if isinstance(current, dict):
+            result = {}
+            if parent is None:
+                root = result
+            else:
+                parent[key] = result
+            for k, v in current.items():
+                snake_key = camel_to_snake(k)
+                new_path = f"{path}.{snake_key}" if path else snake_key
+
+                if new_path in exclude_set:
+                    # Keep original value without recursing
+                    result[snake_key] = v
+                elif isinstance(v, (dict, list)):
+                    stack.append((v, result, snake_key, new_path))
+                else:
+                    result[snake_key] = v
+        elif isinstance(current, list):
+            result_list: list[Any] = [None] * len(current)
+            if parent is None:
+                root = result_list
+            else:
+                parent[key] = result_list
+            for i, item in enumerate(current):
+                if isinstance(item, (dict, list)):
+                    stack.append((item, result_list, i, path))
+                else:
+                    result_list[i] = item
+        else:
+            if parent is None:
+                root = current
+            else:
+                parent[key] = current
+
+    return root

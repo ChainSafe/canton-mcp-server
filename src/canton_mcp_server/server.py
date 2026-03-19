@@ -26,7 +26,13 @@ import base64
 import datetime
 import json
 import logging
+import sys
 import uuid
+
+# Increase recursion limit for deep async call stacks (FastAPI + httpx + asyncio).
+# Default 1000 is insufficient when response.json() is called from within nested
+# async middleware. 3000 frames ≈ 150KB stack, well within safe limits.
+sys.setrecursionlimit(3000)
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import quote
@@ -85,6 +91,7 @@ from canton_mcp_server.canton_billing import (
     submit_signed_topology,
     submit_topology_via_billing_portal,
     is_party_registered,
+    ensure_party_registered,
     CantonBillingError,
 )
 
@@ -509,23 +516,30 @@ After top-up, return to Cursor and your tools will work again.
 
         # Create ChargeReceipt for streaming mode
         # (recorded immediately since streaming starts now)
+        receipt_skipped = False
         if payment_handler.canton_enabled and party_id:
             try:
                 price_cc = payment_handler.get_tool_price(tool_name, arguments)
-                # Create ChargeReceipt for ALL calls (even free-tier $0) so the call counter tracks usage
-                async def create_charge():
-                    try:
-                        charge_contract_id = await create_charge_receipt(
-                            user_party=party_id,
-                            tool=tool_name,
-                            amount=price_cc,
-                            request_id=str(mcp_request.id),
-                        )
-                        logger.info(f"💳 ChargeReceipt created (streaming): {charge_contract_id}")
-                    except Exception as e:
-                        logger.error(f"Failed to create ChargeReceipt: {e}")
-                asyncio.create_task(create_charge())
-                logger.info(f"💳 Creating ChargeReceipt (streaming): {tool_name} - {price_cc} CC from {party_id}")
+                # Pre-check: skip receipt if party is not registered (don't block tool)
+                party_visible = is_party_registered(party_id) or await asyncio.create_task(ensure_party_registered(party_id))
+                if not party_visible:
+                    receipt_skipped = True
+                    logger.warning(f"Skipping ChargeReceipt (streaming): party {party_id} not registered on any participant")
+                else:
+                    # Create ChargeReceipt for ALL calls (even free-tier $0) so the call counter tracks usage
+                    async def create_charge():
+                        try:
+                            charge_contract_id = await create_charge_receipt(
+                                user_party=party_id,
+                                tool=tool_name,
+                                amount=price_cc,
+                                request_id=str(mcp_request.id),
+                            )
+                            logger.info(f"ChargeReceipt created (streaming): {charge_contract_id}")
+                        except Exception as e:
+                            logger.error(f"Failed to create ChargeReceipt: {e}")
+                    asyncio.create_task(create_charge())
+                    logger.info(f"Creating ChargeReceipt (streaming): {tool_name} - {price_cc} CC from {party_id}")
             except Exception as e:
                 logger.error(f"Failed to create ChargeReceipt: {e}")
 
@@ -545,34 +559,45 @@ After top-up, return to Cursor and your tools will work again.
                         tool=tool_name,
                     )
                 )
-                logger.info(f"📤 Broadcasted payment-required: {tool_name} - ${price_usd} from {party_id}")
+                logger.info(f"Broadcasted payment-required: {tool_name} - ${price_usd} from {party_id}")
+
+        response_headers = {
+            "X-Request-Id": str(mcp_request.id),
+            "X-Stream-Format": "sse",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
+        if receipt_skipped:
+            response_headers["X-Registration-Hint"] = "party-not-registered"
 
         return StreamingResponse(
             create_sse_stream(tool_generator),
             media_type="text/event-stream",
-            headers={
-                "X-Request-Id": str(mcp_request.id),
-                "X-Stream-Format": "sse",
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-            },
+            headers=response_headers,
         )
 
     # Non-streaming mode: collect and return final result
     final_response = await collect_final_result(tool_generator)
     if final_response:
         # Create ChargeReceipt on Canton ledger
+        receipt_skipped_nonstream = False
         if payment_handler.canton_enabled and party_id:
             try:
                 price_cc = payment_handler.get_tool_price(tool_name, arguments)
-                # Create ChargeReceipt for ALL calls (even free-tier $0) so the call counter tracks usage
-                charge_contract_id = await create_charge_receipt(
-                    user_party=party_id,
-                    tool=tool_name,
-                    amount=price_cc,
-                    request_id=str(mcp_request.id),
-                )
-                logger.info(f"💳 ChargeReceipt created on-chain: {tool_name} - {price_cc} CC from {party_id} (contract: {charge_contract_id})")
+                # Pre-check: skip receipt if party is not registered (don't block tool)
+                party_visible = is_party_registered(party_id) or await asyncio.create_task(ensure_party_registered(party_id))
+                if not party_visible:
+                    receipt_skipped_nonstream = True
+                    logger.warning(f"Skipping ChargeReceipt: party {party_id} not registered on any participant")
+                else:
+                    # Create ChargeReceipt for ALL calls (even free-tier $0) so the call counter tracks usage
+                    charge_contract_id = await create_charge_receipt(
+                        user_party=party_id,
+                        tool=tool_name,
+                        amount=price_cc,
+                        request_id=str(mcp_request.id),
+                    )
+                    logger.info(f"ChargeReceipt created on-chain: {tool_name} - {price_cc} CC from {party_id} (contract: {charge_contract_id})")
             except Exception as e:
                 logger.error(f"Failed to create ChargeReceipt: {e}")
 
@@ -592,9 +617,13 @@ After top-up, return to Cursor and your tools will work again.
                         tool=tool_name,
                     )
                 )
-                logger.debug(f"📤 Broadcasted payment-required for '{tool_name}' (non-streaming mode)")
+                logger.debug(f"Broadcasted payment-required for '{tool_name}' (non-streaming mode)")
 
-        return JSONResponse(content=final_response.to_camel_dict())
+        response_dict = final_response.to_camel_dict()
+        if receipt_skipped_nonstream:
+            response_dict["_meta"] = response_dict.get("_meta", {})
+            response_dict["_meta"]["registrationHint"] = "party-not-registered"
+        return JSONResponse(content=response_dict)
 
     return error_response(
         mcp_request.id, ErrorCodes.INTERNAL_ERROR, "Tool execution produced no response"
@@ -892,7 +921,8 @@ async def request_auth_challenge(request: Request):
                                 f"{len(topology_txs)} topology txs to sign"
                             )
                     except Exception as e:
-                        logger.warning(f"Topology generation failed (non-blocking): {e}")
+                        logger.warning(f"Topology generation failed: {e}")
+                        response_data["topologyError"] = str(e)
 
             return JSONResponse(content=response_data)
         except AuthError as e:
@@ -945,6 +975,8 @@ async def verify_auth_signature(request: Request):
 
         # Submit signed topology transactions if provided
         party_registered = False
+        registration_needed = False
+
         if (
             payment_handler.canton_enabled
             and topology_signatures
@@ -1003,6 +1035,79 @@ async def verify_auth_signature(request: Request):
                         )
             except Exception as e:
                 logger.warning(f"Party registration failed (non-blocking): {e}")
+
+        # Check registration status: if party is not registered and didn't just
+        # register, check if it's visible to the ledger (handles parties on other
+        # participants like mainnet-beta). If truly unregistered, tell the client.
+        if payment_handler.canton_enabled and not party_registered:
+            if not is_party_registered(party_id):
+                # Check via ledger probe (catches parties on other participants)
+                ledger_visible = await ensure_party_registered(party_id)
+                if not ledger_visible:
+                    registration_needed = True
+                    logger.warning(f"Party {party_id} not registered on any participant")
+
+        # If registration is needed and the client didn't provide topology
+        # signatures, return the topology hashes so they can sign and retry
+        if registration_needed and not topology_signatures:
+            # Re-generate topology hashes for the client to sign
+            from canton_mcp_server.auth import _public_key_store
+            pk_b64 = (
+                base64.b64encode(_public_key_store[party_id]).decode()
+                if party_id in _public_key_store else None
+            )
+            topology_hashes = []
+            if pk_b64:
+                try:
+                    result = await generate_topology_for_party(party_id, pk_b64)
+                    if result:
+                        _pending_topology[party_id] = result
+                        if isinstance(result, dict):
+                            topology_hashes = [tx["hash"] for tx in result["topology_txs"]]
+                        else:
+                            topology_hashes = [tx["hash"] for tx in result]
+                except Exception as e:
+                    logger.warning(f"Topology generation for registration failed: {e}")
+
+            if topology_hashes:
+                logger.info(
+                    f"Party {party_id} needs registration — returning topology hashes "
+                    f"instead of JWT ({len(topology_hashes)} txs to sign)"
+                )
+                return JSONResponse(content={
+                    "registrationRequired": True,
+                    "topologyHashes": topology_hashes,
+                    "message": "Party not registered. Sign each topologyHash with your private key "
+                               "and retry /auth/verify with topologySignatures.",
+                })
+            else:
+                # Could not generate topology — block JWT issuance
+                logger.warning(
+                    f"Party {party_id} not registered and topology generation failed — "
+                    f"cannot issue JWT"
+                )
+                return JSONResponse(content={
+                    "registrationRequired": True,
+                    "topologyHashes": [],
+                    "message": "Party not registered and topology generation failed. "
+                               "Re-authenticate via /auth/challenge with your publicKey.",
+                })
+
+        # If topology signatures were provided but registration failed, block JWT
+        if (
+            payment_handler.canton_enabled
+            and topology_signatures
+            and not party_registered
+            and not is_party_registered(party_id)
+        ):
+            logger.warning(
+                f"Party {party_id} topology submission failed — cannot issue JWT"
+            )
+            return JSONResponse(content={
+                "registrationRequired": True,
+                "topologyHashes": [],
+                "message": "Party registration failed. Please retry /auth/challenge to get fresh topology hashes.",
+            })
 
         # Generate JWT token
         token = generate_jwt_token(party_id, f"challenge-{challenge[:16]}")
@@ -1143,11 +1248,23 @@ async def create_billing_credit(request: Request):
         expected_key = get_env("BILLING_API_KEY", "")
         authorized = False
 
+        # Debug: log API key auth state (redacted)
+        logger.info(
+            f"💳 Credit auth check: api_key_present={bool(api_key)} "
+            f"(len={len(api_key)}), expected_key_present={bool(expected_key)} "
+            f"(len={len(expected_key)})"
+        )
+
         # Option 1: Valid API key (for billing portal)
         if expected_key and api_key:
             if hmac.compare_digest(api_key, expected_key):
                 authorized = True
                 logger.info(f"💳 Credit request authorized via API key for {user_party}")
+            else:
+                logger.warning(
+                    f"💳 API key mismatch: received_prefix={api_key[:8]}... "
+                    f"expected_prefix={expected_key[:8]}..."
+                )
 
         # Option 2: Verify transfer exists on Canton ledger
         if not authorized:

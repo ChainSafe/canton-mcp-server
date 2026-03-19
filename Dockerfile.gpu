@@ -81,6 +81,10 @@ WORKDIR /app
 # Copy installed dependencies from builder (includes GPU deps)
 COPY --from=builder --chown=canton:canton /app/.venv /app/.venv
 
+# Fix venv Python symlink: builder has Python at /usr/local/bin/python3,
+# but this stage (nvidia/cuda + deadsnakes) has it at /usr/bin/python3.12
+RUN ln -sf /usr/bin/python3.12 /app/.venv/bin/python
+
 # Copy documentation repositories from builder
 COPY --from=builder --chown=canton:canton /app/docs /app/docs
 
