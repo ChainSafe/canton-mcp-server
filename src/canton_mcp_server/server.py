@@ -29,10 +29,6 @@ import logging
 import sys
 import uuid
 
-# Increase recursion limit for deep async call stacks (FastAPI + httpx + asyncio).
-# Default 1000 is insufficient when response.json() is called from within nested
-# async middleware. 3000 frames ≈ 150KB stack, well within safe limits.
-sys.setrecursionlimit(3000)
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import quote
@@ -94,6 +90,11 @@ from canton_mcp_server.canton_billing import (
     ensure_party_registered,
     CantonBillingError,
 )
+
+# Increase recursion limit for deep async call stacks (FastAPI + httpx + asyncio).
+# Default 1000 is insufficient when response.json() is called from within nested
+# async middleware. 3000 frames ≈ 150KB stack, well within safe limits.
+sys.setrecursionlimit(3000)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(levelname)-5s | %(message)s")
