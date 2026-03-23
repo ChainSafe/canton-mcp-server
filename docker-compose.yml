@@ -14,6 +14,8 @@ services:
       - /opt/canonical-daml-docs-daml:/opt/canonical-daml-docs/daml:ro
       - /opt/canonical-daml-docs-canton:/opt/canonical-daml-docs/canton:ro
       - /opt/canonical-daml-docs-daml-finance:/opt/canonical-daml-docs/daml-finance:ro
+      # Persistent data (registered parties cache, etc.)
+      - canton-mcp-data:/app/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
@@ -37,6 +39,9 @@ services:
       timeout: 10s
       retries: 3
       start_period: 5s
+
+volumes:
+  canton-mcp-data:
 
 networks:
   canton-network:

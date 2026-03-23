@@ -11,14 +11,17 @@ managed by the Canton participant).
 
 import asyncio
 import base64
+import json as json_module
 import logging
 import os
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional, Set
 
 import httpx
+import orjson
 
 from canton_mcp_server.env import get_env, get_env_bool
 
@@ -67,8 +70,44 @@ VALIDATOR_OAUTH_AUDIENCE = os.getenv("VALIDATOR_OAUTH_AUDIENCE", "")
 # Validator OAuth token cache (separate from ledger API token)
 _validator_token_cache: dict = {"token": None, "expires_at": 0}
 
-# In-memory cache of parties already registered on-chain
+# Persistent cache of parties already registered on-chain
+_REGISTERED_PARTIES_FILE = os.getenv(
+    "REGISTERED_PARTIES_FILE", "/app/data/registered_parties.json"
+)
 _registered_parties: Set[str] = set()
+
+
+def _load_registered_parties() -> None:
+    """Load registered parties from disk on startup."""
+    global _registered_parties
+    try:
+        path = Path(_REGISTERED_PARTIES_FILE)
+        if path.exists():
+            data = json_module.loads(path.read_text())
+            _registered_parties = set(data.get("parties", []))
+            logger.info(f"Loaded {len(_registered_parties)} registered parties from {path}")
+    except Exception as e:
+        logger.warning(f"Failed to load registered parties from disk: {e}")
+
+
+def _save_registered_parties() -> None:
+    """Persist registered parties to disk."""
+    try:
+        path = Path(_REGISTERED_PARTIES_FILE)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json_module.dumps({"parties": sorted(_registered_parties)}))
+    except Exception as e:
+        logger.warning(f"Failed to save registered parties to disk: {e}")
+
+
+def _add_registered_party(party_id: str) -> None:
+    """Add a party to the registered set and persist."""
+    _registered_parties.add(party_id)
+    _save_registered_parties()
+
+
+# Load on module import
+_load_registered_parties()
 
 
 @dataclass
@@ -158,7 +197,7 @@ async def _get_validator_oauth_token() -> str:
                 logger.error(f"Validator OAuth token request failed: {response.status_code} {error_text}")
                 raise OAuthError(f"Failed to get Validator OAuth token: {response.status_code} {error_text}")
 
-            data = response.json()
+            data = orjson.loads(response.content)
             token = data["access_token"]
             expires_in = data.get("expires_in", 3600)
 
@@ -211,17 +250,17 @@ async def generate_topology_via_billing_portal(
                 "already exists", "ALREADY_EXISTS",
                 "already registered",
             ]):
-                _registered_parties.add(party_id)
+                _add_registered_party(party_id)
                 logger.info(f"Party already registered (billing portal): {party_id}")
                 return None
             raise CantonBillingError(
                 f"Billing portal generate failed: {response.status_code} {error_text}"
             )
 
-        data = response.json()
+        data = orjson.loads(response.content)
         topology_txs = data.get("topologyTxs", [])
         if not topology_txs:
-            _registered_parties.add(party_id)
+            _add_registered_party(party_id)
             logger.info(f"Party already registered (no txs returned): {party_id}")
             return None
 
@@ -277,9 +316,9 @@ async def submit_topology_via_billing_portal(
             )
 
         if response.status_code == 200:
-            data = response.json()
+            data = orjson.loads(response.content)
             if data.get("success"):
-                _registered_parties.add(party_id)
+                _add_registered_party(party_id)
                 logger.info(f"Party registered via billing portal gRPC: {party_id}")
                 return True
             logger.warning(f"Billing portal submit returned success=false: {data}")
@@ -290,7 +329,7 @@ async def submit_topology_via_billing_portal(
             "already exists", "ALREADY_EXISTS",
             "already registered",
         ]):
-            _registered_parties.add(party_id)
+            _add_registered_party(party_id)
             logger.info(f"Party already registered (billing portal submit): {party_id}")
             return True
 
@@ -355,14 +394,14 @@ async def generate_topology_for_party(
                 "already exists", "ALREADY_EXISTS",
                 "TOPOLOGY_SERIAL_MISMATCH", "serial_mismatch",
             ]):
-                _registered_parties.add(party_id)
+                _add_registered_party(party_id)
                 logger.info(f"Party already registered: {party_id}")
                 return None
             raise CantonBillingError(
                 f"Topology generate failed: {response.status_code} {error_text}"
             )
 
-        data = response.json()
+        data = orjson.loads(response.content)
         topology_txs = data.get("topology_txs", [])
         logger.info(f"Generated {len(topology_txs)} topology transactions for {party_id}")
         return topology_txs
@@ -410,7 +449,7 @@ async def submit_signed_topology(
             )
 
         if response.status_code == 200:
-            _registered_parties.add(party_id)
+            _add_registered_party(party_id)
             logger.info(f"Party registered on-chain: {party_id}")
             return True
 
@@ -419,7 +458,7 @@ async def submit_signed_topology(
             "already exists", "ALREADY_EXISTS",
             "TOPOLOGY_SERIAL_MISMATCH", "serial_mismatch",
         ]):
-            _registered_parties.add(party_id)
+            _add_registered_party(party_id)
             logger.info(f"Party already registered: {party_id}")
             return True
 
@@ -436,6 +475,86 @@ async def submit_signed_topology(
 def is_party_registered(party_id: str) -> bool:
     """Check if party is in the registered cache."""
     return party_id in _registered_parties
+
+
+async def ensure_party_registered(party_id: str) -> bool:
+    """
+    Ensure a party is visible to the participant (registered in topology).
+
+    Two-step check:
+    1. Billing portal's /api/register-party/check (ListPartyToParticipant gRPC)
+       — finds parties mapped to OUR participant
+    2. Ledger probe query (filtersByParty with the party)
+       — finds parties on ANY participant in the synchronizer (e.g. mainnet-beta
+         hosted on a different participant but visible via the global domain)
+
+    Args:
+        party_id: Canton party ID to check
+
+    Returns:
+        True if party is confirmed visible to the ledger, False otherwise
+    """
+    if party_id in _registered_parties:
+        return True
+
+    # Provider party is always registered
+    if party_id == CANTON_PROVIDER_PARTY:
+        _add_registered_party(party_id)
+        return True
+
+    logger.info(f"Checking party registration: {party_id}")
+
+    # Step 1: Check billing portal (ListPartyToParticipant on our participant)
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(
+                f"{BILLING_PORTAL_URL}/api/register-party/check",
+                json={"partyId": party_id},
+            )
+
+        if response.status_code == 200:
+            data = orjson.loads(response.content)
+            if data.get("exists"):
+                _add_registered_party(party_id)
+                logger.info(f"Party confirmed registered (topology): {party_id}")
+                return True
+    except Exception as e:
+        logger.warning(f"Party topology check failed: {e}")
+
+    # Step 2: Ledger probe — query active contracts with the party in filtersByParty.
+    # If the ledger doesn't reject the party, it's known on the synchronizer
+    # (even if hosted on a different participant).
+    try:
+        offset = await get_ledger_offset()
+        await _make_ledger_request(
+            "POST",
+            "/v2/state/active-contracts",
+            {
+                "filter": {
+                    "filtersByParty": {
+                        party_id: {
+                            "filters": []
+                        }
+                    }
+                },
+                "activeAtOffset": offset,
+            }
+        )
+        # If we get here without error, the ledger knows this party
+        _add_registered_party(party_id)
+        logger.info(f"Party confirmed registered (ledger probe): {party_id}")
+        return True
+    except (LedgerError, CantonBillingError) as e:
+        error_str = str(e)
+        if "unknownInformees" in error_str or "UNKNOWN_INFORMEES" in error_str:
+            logger.warning(f"Party truly unknown to ledger: {party_id}")
+            return False
+        # Other ledger errors (network, auth) — don't conclude party is unregistered
+        logger.warning(f"Ledger probe inconclusive for {party_id}: {e}")
+        return False
+    except Exception as e:
+        logger.warning(f"Ledger probe failed for {party_id}: {e}")
+        return False
 
 
 async def get_oauth_token() -> str:
@@ -500,7 +619,7 @@ async def get_oauth_token() -> str:
                 logger.error(f"OAuth token request failed: {response.status_code} {error_text}")
                 raise OAuthError(f"Failed to get OAuth token: {response.status_code} {error_text}")
 
-            data = response.json()
+            data = orjson.loads(response.content)
             token = data["access_token"]
             expires_in = data.get("expires_in", 3600)
 
@@ -571,7 +690,7 @@ async def _make_ledger_request(
                     response = await client.post(url, headers=headers, json=data)
 
                 if response.status_code in (200, 201):
-                    return response.json()
+                    return orjson.loads(response.content)
 
                 logger.error(f"Ledger 403 Forbidden after token refresh: {response.text}")
                 raise LedgerError(f"Access denied to Canton API: {response.text}")
@@ -580,7 +699,7 @@ async def _make_ledger_request(
                 logger.error(f"Ledger error {response.status_code}: {response.text}")
                 raise LedgerError(f"Ledger API error: {response.status_code} {response.text}")
 
-            return response.json()
+            return orjson.loads(response.content)
 
     except httpx.RequestError as e:
         raise LedgerError(f"Ledger request failed: {e}")
@@ -787,7 +906,57 @@ async def create_charge_receipt(
 
         raise LedgerError("No ChargeReceipt created in response")
 
-    except LedgerError:
+    except (LedgerError, CantonBillingError) as e:
+        error_str = str(e)
+        # If UNKNOWN_INFORMEES, try auto-registration and retry once
+        if "unknownInformees" in error_str or "UNKNOWN_INFORMEES" in error_str:
+            logger.warning(f"UNKNOWN_INFORMEES for {user_party} - attempting auto-registration")
+            registered = await ensure_party_registered(user_party)
+            if registered:
+                logger.info(f"Party {user_party} confirmed registered, retrying ChargeReceipt")
+                try:
+                    data = await _make_ledger_request(
+                        "POST",
+                        "/v2/commands/submit-and-wait-for-transaction",
+                        {
+                            "commands": {
+                                "userId": CANTON_USER_ID,
+                                "commandId": f"charge-{request_id}-retry",
+                                "actAs": [CANTON_PROVIDER_PARTY],
+                                "readAs": [CANTON_PROVIDER_PARTY],
+                                "commands": [{
+                                    "CreateCommand": {
+                                        "templateId": template_id,
+                                        "createArguments": {
+                                            "provider": CANTON_PROVIDER_PARTY,
+                                            "user": user_party,
+                                            "tool": tool,
+                                            "amount": str(amount),
+                                            "requestId": request_id,
+                                            "description": description or f"MCP tool: {tool}",
+                                            "timestamp": now,
+                                        }
+                                    }
+                                }]
+                            }
+                        }
+                    )
+                    events = data.get("transaction", {}).get("events", [])
+                    for event in events:
+                        created = event.get("CreatedEvent") or event.get("createdEvent", {})
+                        template = created.get("templateId", "")
+                        if template.endswith(":ChargeReceipt"):
+                            contract_id = created.get("contractId")
+                            logger.info(f"ChargeReceipt created (after auto-registration): {contract_id}")
+                            return contract_id
+                    for event in events:
+                        created = event.get("CreatedEvent") or event.get("createdEvent", {})
+                        if created.get("contractId"):
+                            return created.get("contractId")
+                except Exception as retry_err:
+                    logger.error(f"ChargeReceipt retry after auto-registration failed: {retry_err}")
+            else:
+                logger.warning(f"Party {user_party} not registered - ChargeReceipt skipped")
         raise
     except Exception as e:
         logger.error(f"Failed to create ChargeReceipt: {e}")
@@ -963,7 +1132,56 @@ async def create_credit_receipt(
 
         raise LedgerError("No CreditReceipt created in response")
 
-    except LedgerError:
+    except (LedgerError, CantonBillingError) as e:
+        error_str = str(e)
+        # If UNKNOWN_INFORMEES, try auto-registration and retry once
+        if "unknownInformees" in error_str or "UNKNOWN_INFORMEES" in error_str:
+            logger.warning(f"UNKNOWN_INFORMEES for {user_party} - attempting auto-registration")
+            registered = await ensure_party_registered(user_party)
+            if registered:
+                logger.info(f"Party {user_party} confirmed registered, retrying CreditReceipt")
+                try:
+                    data = await _make_ledger_request(
+                        "POST",
+                        "/v2/commands/submit-and-wait-for-transaction",
+                        {
+                            "commands": {
+                                "userId": CANTON_USER_ID,
+                                "commandId": f"credit-{transfer_id}-retry",
+                                "actAs": [CANTON_PROVIDER_PARTY],
+                                "readAs": [CANTON_PROVIDER_PARTY],
+                                "commands": [{
+                                    "CreateCommand": {
+                                        "templateId": template_id,
+                                        "createArguments": {
+                                            "provider": CANTON_PROVIDER_PARTY,
+                                            "user": user_party,
+                                            "amount": str(amount),
+                                            "transferId": transfer_id,
+                                            "description": description or f"Top-up: {amount} CC",
+                                            "timestamp": now,
+                                        }
+                                    }
+                                }]
+                            }
+                        }
+                    )
+                    events = data.get("transaction", {}).get("events", [])
+                    for event in events:
+                        created = event.get("CreatedEvent") or event.get("createdEvent", {})
+                        template = created.get("templateId", "")
+                        if template.endswith(":CreditReceipt"):
+                            contract_id = created.get("contractId")
+                            logger.info(f"CreditReceipt created (after auto-registration): {contract_id}")
+                            return contract_id
+                    for event in events:
+                        created = event.get("CreatedEvent") or event.get("createdEvent", {})
+                        if created.get("contractId"):
+                            return created.get("contractId")
+                except Exception as retry_err:
+                    logger.error(f"CreditReceipt retry after auto-registration failed: {retry_err}")
+            else:
+                logger.warning(f"Party {user_party} not registered - CreditReceipt creation failed")
         raise
     except Exception as e:
         logger.error(f"Failed to create CreditReceipt: {e}")
@@ -1209,6 +1427,9 @@ async def verify_transfer_on_chain(
 
     logger.info(f"Verifying transfer on-chain: txId={transfer_id}, payer={user_party}, amount={expected_amount}")
 
+    max_retries = 3
+    retry_delay = 2.0  # seconds
+
     try:
         token = await get_oauth_token()
 
@@ -1220,26 +1441,37 @@ async def verify_transfer_on_chain(
         }
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                url,
-                headers=headers,
-                json={
-                    "updateId": transfer_id,
-                    "transactionFormat": {
-                        "eventFormat": {
-                            "filtersByParty": {
-                                user_party: {"cumulative": []},
-                                payee_party: {"cumulative": []},
+            response = None
+            for attempt in range(max_retries + 1):
+                response = await client.post(
+                    url,
+                    headers=headers,
+                    json={
+                        "updateId": transfer_id,
+                        "transactionFormat": {
+                            "eventFormat": {
+                                "filtersByParty": {
+                                    user_party: {"cumulative": []},
+                                    payee_party: {"cumulative": []},
+                                },
+                                "verbose": True,
                             },
-                            "verbose": True,
+                            "transactionShape": "TRANSACTION_SHAPE_LEDGER_EFFECTS",
                         },
-                        "transactionShape": "TRANSACTION_SHAPE_LEDGER_EFFECTS",
                     },
-                },
-            )
+                )
+
+                if response.status_code == 404 and attempt < max_retries:
+                    logger.warning(
+                        f"Transaction not found (attempt {attempt + 1}/{max_retries + 1}), "
+                        f"retrying in {retry_delay}s: {transfer_id}"
+                    )
+                    await asyncio.sleep(retry_delay)
+                    continue
+                break
 
             if response.status_code == 404:
-                logger.warning(f"Transaction not found: {transfer_id}")
+                logger.warning(f"Transaction not found after {max_retries + 1} attempts: {transfer_id}")
                 return {
                     "verified": False,
                     "error": "Transaction not found on ledger",
@@ -1250,7 +1482,7 @@ async def verify_transfer_on_chain(
                 logger.error(f"Ledger query failed: {response.status_code} {response.text}")
                 raise LedgerError(f"Failed to query transaction: {response.status_code}")
 
-            tx_data = response.json()
+            tx_data = orjson.loads(response.content)
             transaction = tx_data.get("transaction")
 
             if not transaction:
