@@ -27,8 +27,13 @@ logger = logging.getLogger(__name__)
 class DamlAutomaterParams(MCPModel):
     """Parameters for DAML Automater tool"""
 
-    action: str = Field(
+    action: Optional[str] = Field(
+        default=None,
         description="Automation action to perform: 'spin_up_env', 'run_tests', 'build_dar', 'status', 'teardown_env', 'check_project', 'init_project'"
+    )
+    request: Optional[str] = Field(
+        default=None,
+        description="Freeform request describing what you want to automate. The tool will infer the action."
     )
     environment: Optional[str] = Field(
         default="local",
@@ -37,7 +42,7 @@ class DamlAutomaterParams(MCPModel):
     config: Optional[Dict[str, Any]] = Field(
         default=None,
         description="""Additional configuration for the automation action.
-        
+
 Common config options:
 - project_path: Absolute path to DAML project (required for run_tests, build_dar, check_project, init_project)
 - dar_path: Path to DAR file (for spin_up_env)
@@ -112,9 +117,25 @@ class DamlAutomaterTool(Tool[DamlAutomaterParams, DamlAutomaterResult]):
         - init_project: Commands to initialize DAML project structure
         """
         action = ctx.params.action
+        request_text = ctx.params.request
         environment = ctx.params.environment or "local"
         config = ctx.params.config or {}
-        
+
+        # Infer action from freeform request if action not provided
+        if not action and request_text:
+            action = self._infer_action(request_text)
+            logger.info(f"🤖 DAML Automater: inferred action={action} from request")
+
+        if not action:
+            yield ctx.structured(DamlAutomaterResult(
+                success=False,
+                action="unknown",
+                message="Please provide an 'action' or 'request' parameter.",
+                instructions="Available actions: spin_up_env, run_tests, build_dar, status, teardown_env, check_project, init_project",
+                details={"available_actions": ["spin_up_env", "run_tests", "build_dar", "status", "teardown_env", "check_project", "init_project"]},
+            ))
+            return
+
         logger.info(f"🤖 DAML Automater: providing guidance for action={action}, environment={environment}")
         
         try:
@@ -166,6 +187,26 @@ class DamlAutomaterTool(Tool[DamlAutomaterParams, DamlAutomaterResult]):
                 }
             ))
     
+    @staticmethod
+    def _infer_action(request: str) -> str:
+        """Infer automation action from freeform request text."""
+        r = request.lower()
+        if any(w in r for w in ["spin up", "start", "launch", "sandbox", "environment"]):
+            return "spin_up_env"
+        if any(w in r for w in ["test", "run test", "check test"]):
+            return "run_tests"
+        if any(w in r for w in ["build", "compile", "dar", "package"]):
+            return "build_dar"
+        if any(w in r for w in ["status", "running", "check env"]):
+            return "status"
+        if any(w in r for w in ["stop", "teardown", "kill", "shut down"]):
+            return "teardown_env"
+        if any(w in r for w in ["init", "create project", "new project", "scaffold", "generate", "template"]):
+            return "init_project"
+        if any(w in r for w in ["valid", "check project", "verify project"]):
+            return "check_project"
+        return "init_project"  # default for general "generate" requests
+
     def _spin_up_env_instructions(self, config: dict) -> DamlAutomaterResult:
         """
         Provide instructions to spin up Canton sandbox environment locally.
