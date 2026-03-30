@@ -13,13 +13,24 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, cast
 
 from fastapi import Request
-from x402.common import (
-    find_matching_payment_requirements,
-    process_price_to_atomic_amount,
-)
-from x402.encoding import safe_base64_decode
-from x402.facilitator import FacilitatorClient
-from x402.types import PaymentPayload, PaymentRequirements, SupportedNetworks
+
+# x402 imports are optional — only needed when X402_ENABLED=true (EVM/USDC payments).
+# Wrap in try/except so the server can start without x402 installed.
+try:
+    from x402.common import (
+        find_matching_payment_requirements,
+        process_price_to_atomic_amount,
+    )
+    from x402.encoding import safe_base64_decode
+    from x402.facilitator import FacilitatorClient
+    from x402.types import PaymentPayload, PaymentRequirements, SupportedNetworks
+    _X402_AVAILABLE = True
+except ImportError:
+    _X402_AVAILABLE = False
+    # Provide stubs so type references don't break
+    PaymentPayload = Any  # type: ignore
+    PaymentRequirements = Any  # type: ignore
+    SupportedNetworks = Any  # type: ignore
 
 from . import tools  # noqa: F401 - Import to trigger tool registration
 from .core import get_registry
