@@ -390,37 +390,53 @@ class DAMLSemanticSearch:
         ])
         logger.info(f"🔍 Found {len(result_ids)} semantically similar files via ChromaDB:\n{all_similarities}")
         
-        # If raw_resources provided, return full resources
+        # Build O(1) lookup by file_path to avoid O(n*k) linear scan
         if raw_resources:
+            lookup = {r.get("file_path", ""): r for r in raw_resources}
             relevant_resources = []
-            for result_id, metadata, distance in zip(result_ids, result_metadatas, result_distances):
-                name = metadata.get("name", "")
+            for metadata, distance in zip(result_metadatas, result_distances):
                 file_path = metadata.get("file_path", "")
-                
-                # Find full resource by name or file_path
-                for resource in raw_resources:
-                    resource_name = resource.get("name", "")
-                    resource_file_path = resource.get("file_path", "")
-                    
-                    if (name and resource_name == name) or (file_path and resource_file_path == file_path):
-                        # Add similarity score
-                        resource_copy = resource.copy()
-                        resource_copy["similarity_score"] = 1.0 - distance  # Convert distance to similarity
-                        relevant_resources.append(resource_copy)
-                        break
-            
-            return relevant_resources
+                resource = lookup.get(file_path)
+                if resource:
+                    resource_copy = resource.copy()
+                    resource_copy["similarity_score"] = 1.0 - distance
+                    relevant_resources.append(resource_copy)
         else:
-            # Return minimal results from metadata (no synthetic summaries)
-            return [
+            relevant_resources = [
                 {
                     "name": metadata.get("name", ""),
                     "file_path": metadata.get("file_path", ""),
                     "description": metadata.get("description", ""),
+                    "source_repo": metadata.get("source_repo", ""),
                     "similarity_score": 1.0 - distance,
                 }
                 for metadata, distance in zip(result_metadatas, result_distances)
             ]
+
+        # Filter results below minimum similarity threshold
+        min_score = float(get_env("MIN_SIMILARITY_THRESHOLD", "0.3"))
+        relevant_resources = [r for r in relevant_resources if r.get("similarity_score", 0) >= min_score]
+
+        # Re-read file content from disk so LLM receives actual code, not empty strings
+        canonical_docs = Path(_default_persist_dir()).parent  # fallback
+        try:
+            canonical_docs = Path(get_env("CANONICAL_DOCS_PATH", "../../canonical-daml-docs"))
+        except Exception:
+            pass
+
+        for r in relevant_resources:
+            source_repo = r.get("source_repo", "")
+            file_path = r.get("file_path", "")
+            if source_repo and file_path:
+                abs_path = canonical_docs / source_repo / file_path
+                try:
+                    r["content"] = abs_path.read_text(encoding="utf-8")
+                except OSError:
+                    r["content"] = ""
+            else:
+                r["content"] = ""
+
+        return relevant_resources
     
     def get_stats(self) -> Dict[str, Any]:
         """Get statistics about the indexed resources (all files, not just anti-patterns)."""
