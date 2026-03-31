@@ -180,7 +180,7 @@ template SimpleIOU
         assert result is not None  # Result object exists
         assert result.model is None  # But model extraction failed
         assert result.confidence == 0.0
-        assert result.method == "compilation_failed"
+        assert result.method == "regex_failed"
 
     def test_validate_authorization_valid(self):
         """Test validation of valid authorization model"""
