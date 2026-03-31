@@ -300,6 +300,9 @@ class DamlReasonTool(Tool[DamlReasonParams, DamlReasonResult]):
         else:
             logger.info("No compilation result - running semantic analysis")
         
+        # Ensure semantic search is injected before safety checker needs it
+        self._ensure_semantic_search()
+
         # Run Gate 1 safety check with compilation context
         module_name = self._extract_module_name(daml_code) or "Main"
         try:

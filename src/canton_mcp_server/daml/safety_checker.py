@@ -235,9 +235,9 @@ FILE {i}: {file.get('file_path', 'unknown')} (similarity: {file.get('similarity_
         """
         logger.info(f"Starting safety check for module: {module_name}")
 
-        if self.semantic_search is None:
+        if self.semantic_search is None or self._raw_resources is None:
             raise RuntimeError(
-                "SemanticSearch not injected into SafetyChecker. "
+                "SemanticSearch and _raw_resources must both be injected into SafetyChecker. "
                 "Ensure DamlReasonTool._ensure_semantic_search() runs before check_pattern_safety()."
             )
 
@@ -250,13 +250,26 @@ FILE {i}: {file.get('file_path', 'unknown')} (similarity: {file.get('similarity_
 
         if compilation_context:
             logger.info("✅ Using client-provided compilation context")
-            from .types import CompilationStatus
+            from .types import CompilationStatus, CompilationError, ErrorCategory
+            succeeded = compilation_context.get("succeeded", False)
+            raw_errors = compilation_context.get("errors", [])
+            parsed_errors = [
+                CompilationError(
+                    file_path="client",
+                    line=0,
+                    column=0,
+                    category=ErrorCategory.OTHER,
+                    message=str(e),
+                    raw_error=str(e),
+                )
+                for e in raw_errors
+            ]
             compilation_result = CompilationResult(
-                status=CompilationStatus.SUCCESS if compilation_context.get("succeeded") else CompilationStatus.FAILED,
-                errors=[],
+                status=CompilationStatus.SUCCESS if succeeded else CompilationStatus.FAILED,
+                errors=parsed_errors,
                 stdout=compilation_context.get("stdout", ""),
                 stderr=compilation_context.get("stderr", ""),
-                exit_code=0 if compilation_context.get("succeeded") else 1,
+                exit_code=0 if succeeded else 1,
             )
             compilation_skipped = False
         else:
