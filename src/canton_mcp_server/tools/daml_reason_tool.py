@@ -300,13 +300,29 @@ class DamlReasonTool(Tool[DamlReasonParams, DamlReasonResult]):
         else:
             logger.info("No compilation result - running semantic analysis")
         
+        # Ensure semantic search is injected before safety checker needs it
+        self._ensure_semantic_search()
+
         # Run Gate 1 safety check with compilation context
         module_name = self._extract_module_name(daml_code) or "Main"
-        safety_result = await self.safety_checker.check_pattern_safety(
-            daml_code, 
-            module_name=module_name,
-            compilation_context=ctx.params.compilation_result
-        )
+        try:
+            safety_result = await self.safety_checker.check_pattern_safety(
+                daml_code,
+                module_name=module_name,
+                compilation_context=ctx.params.compilation_result
+            )
+        except RuntimeError as e:
+            logger.error(f"Safety check failed: {e}")
+            yield ctx.structured(DamlReasonResult(
+                action="delegate",
+                valid=False,
+                confidence=0.0,
+                issues=[],
+                business_intent=business_intent,
+                delegation_reason="Service temporarily unavailable — analysis requires LLM connectivity",
+                reasoning="Safety check could not complete. Ensure ANTHROPIC_API_KEY is set and ENABLE_LLM_ENRICHMENT=true.",
+            ))
+            return
         
         # CASE 2a: Validation passed with high confidence
         if safety_result.passed and not safety_result.should_delegate:
@@ -391,45 +407,15 @@ Send back any compilation errors for detailed analysis."""
                 for error in safety_result.compilation_result.errors:
                     issues.append(str(error))
         
-        # Get pattern recommendations
-        # OPTIMIZATION: Reuse similar_files from safety_result if available
+        # Use similar_files already found by SafetyChecker — never re-query
         formatted_patterns = []
-        
-        if safety_result.similar_files:
-            # Use files already found by SafetyChecker (avoid re-searching)
-            logger.info("♻️ Reusing similar files from SafetyChecker")
-            for file in safety_result.similar_files[:5]:
-                formatted_patterns.append({
-                    "name": file.get("name", "Unknown"),
-                    "path": file.get("file_path", "Unknown"),
-                    "score": file.get("similarity_score", 0.0),
-                    "description": file.get("description", "")[:200]
-                })
-        else:
-            # Fallback: Search for patterns
-            logger.info("🔍 Searching for similar patterns...")
-            
-            # Reuse SafetyChecker's semantic search if available
-            if hasattr(self.safety_checker, '_raw_resources') and self.safety_checker._raw_resources:
-                self._raw_resources = self.safety_checker._raw_resources
-                self._semantic_search = self.safety_checker.semantic_search
-            else:
-                self._ensure_semantic_search()
-            
-            if self._semantic_search and self._raw_resources:
-                similar_files = self._semantic_search.search_similar_files(
-                    code=daml_code,
-                    top_k=5,
-                    raw_resources=[r for resources in self._raw_resources.values() for r in resources]
-                )
-                
-                for file in similar_files:
-                    formatted_patterns.append({
-                        "name": file.get("name", "Unknown"),
-                        "path": file.get("file_path", "Unknown"),
-                        "score": file.get("similarity_score", 0.0),
-                        "description": file.get("description", "")[:200]
-                    })
+        for file in (safety_result.similar_files or [])[:5]:
+            formatted_patterns.append({
+                "name": file.get("name", "Unknown"),
+                "path": file.get("file_path", "Unknown"),
+                "score": file.get("similarity_score", 0.0),
+                "description": file.get("description", "")[:200]
+            })
         
         # Prepare compilation instructions if compilation was skipped
         compilation_instructions = None
@@ -521,6 +507,6 @@ Instructions:
 
     def _extract_module_name(self, daml_code: str) -> Optional[str]:
         """Extract module name from DAML code"""
-        match = re.search(r'^\s*module\s+(\w+)\s+where', daml_code, re.MULTILINE)
+        match = re.search(r'^\s*module\s+([\w.]+)\s+where', daml_code, re.MULTILINE)
         return match.group(1) if match else None
 

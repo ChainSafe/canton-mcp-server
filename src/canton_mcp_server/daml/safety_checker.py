@@ -56,7 +56,7 @@ class SafetyChecker:
         # Initialize AuthorizationValidator with LLM support if enabled
         if auth_validator is None:
             llm_client = None
-            if get_env_bool("ENABLE_LLM_AUTH_EXTRACTION", True):
+            if get_env_bool("ENABLE_LLM_AUTH_EXTRACTION", True) and get_env_bool("ENABLE_LLM_ENRICHMENT", False):
                 try:
                     from anthropic import Anthropic
                     api_key = get_env("ANTHROPIC_API_KEY", "")
@@ -82,56 +82,6 @@ class SafetyChecker:
 
         logger.info("Safety checker initialized (Gate 1: DAML Compiler Safety)")
 
-    def _ensure_semantic_search(self):
-        """Lazy initialization of semantic search with raw resources."""
-        if self.semantic_search is None:
-            from pathlib import Path
-            import os
-            from ..core.direct_file_loader import DirectFileResourceLoader
-            from ..core.semantic_search import create_semantic_search
-            
-            logger.info("Initializing semantic search for safety checking...")
-            canonical_docs_path = Path(os.environ.get("CANONICAL_DOCS_PATH", "../../canonical-daml-docs"))
-            loader = DirectFileResourceLoader(canonical_docs_path)
-            raw_by_category = loader.scan_repositories(force_refresh=False)
-            
-            # Flatten all resources
-            all_resources = []
-            for resources in raw_by_category.values():
-                all_resources.extend(resources)
-            
-            logger.info(f"Indexing {len(all_resources)} resources for semantic search...")
-            self.semantic_search = create_semantic_search(
-                raw_resources=all_resources,
-                force_reindex=False
-            )
-            
-            if self.semantic_search:
-                stats = self.semantic_search.get_stats()
-                logger.info(f"✅ Semantic search initialized: {stats['indexed_count']} resources indexed")
-            else:
-                logger.warning("⚠️ Semantic search unavailable - will skip similarity checks")
-
-            # Strip content from in-memory lookup cache to save RAM
-            self._raw_resources = {
-                category: [
-                    {
-                        "name": r.get("name", ""),
-                        "file_path": r.get("file_path", ""),
-                        "description": r.get("description", ""),
-                        "source_repo": r.get("source_repo", ""),
-                        "source_commit": r.get("source_commit", ""),
-                        "canonical_hash": r.get("canonical_hash", ""),
-                        "similarity_score": 0.0,
-                    }
-                    for r in resources
-                ]
-                for category, resources in raw_by_category.items()
-            }
-
-            # Free full-content dicts now that we've extracted lightweight metadata
-            del raw_by_category
-
     async def _check_safety_with_llm(
         self,
         code: str,
@@ -144,20 +94,21 @@ class SafetyChecker:
         Returns:
             Dict with keys: is_safe, reasoning, confidence, full_response
         """
-        from ..env import get_env
+        from ..env import get_env, get_env_bool
         import asyncio
-        
-        # Check if LLM is available
-        api_key = get_env("ANTHROPIC_API_KEY", "")
-        if not api_key:
-            # No LLM available - fall back to compilation-only validation
+
+        if not get_env_bool("ENABLE_LLM_ENRICHMENT", False):
             return {
                 "is_safe": True,
-                "reasoning": "No LLM available for safety analysis. Relying on compilation checks only.",
-                "confidence": 0.5,
-                "full_response": None
+                "reasoning": "LLM enrichment disabled (ENABLE_LLM_ENRICHMENT=false).",
+                "confidence": 0.6,
+                "full_response": None,
             }
-        
+
+        api_key = get_env("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            raise RuntimeError("ANTHROPIC_API_KEY is required for safety checking but is not set")
+
         try:
             from anthropic import Anthropic
             llm_client = Anthropic(api_key=api_key)
@@ -237,14 +188,11 @@ Be specific and reference the similar files by their paths."""
                     "full_response": response_text
                 }
                 
+        except RuntimeError:
+            raise
         except Exception as e:
             logger.error(f"LLM safety check failed: {e}")
-            return {
-                "is_safe": True,  # Don't block on LLM errors
-                "reasoning": f"LLM safety check error: {e}. Relying on compilation checks only.",
-                "confidence": 0.5,
-                "full_response": None
-            }
+            raise RuntimeError(f"LLM safety check failed: {e}") from e
 
     def _format_similar_files_for_llm(self, similar_files: list) -> str:
         """Format similar files for LLM context."""
@@ -287,60 +235,80 @@ FILE {i}: {file.get('file_path', 'unknown')} (similarity: {file.get('similarity_
         """
         logger.info(f"Starting safety check for module: {module_name}")
 
+        if self.semantic_search is None or self._raw_resources is None:
+            raise RuntimeError(
+                "SemanticSearch and _raw_resources must both be injected into SafetyChecker. "
+                "Ensure DamlReasonTool._ensure_semantic_search() runs before check_pattern_safety()."
+            )
+
         # Generate code hash for audit trail
         code_hash = hashlib.sha256(code.encode()).hexdigest()
 
         # Step 1: Use compilation context from client (server never compiles)
         compilation_result = None
-        compilation_skipped = True  # Always true - server doesn't compile
-        
+        compilation_skipped = True
+
         if compilation_context:
             logger.info("✅ Using client-provided compilation context")
-            # TODO: Convert dict to proper CompilationResult object for type safety
-            # For now, pass dict directly to authorization extraction
+            from .types import CompilationStatus, CompilationError, ErrorCategory
+            succeeded = compilation_context.get("succeeded", False)
+            raw_errors = compilation_context.get("errors", [])
+            parsed_errors = [
+                CompilationError(
+                    file_path="client",
+                    line=0,
+                    column=0,
+                    category=ErrorCategory.OTHER,
+                    message=str(e),
+                    raw_error=str(e),
+                )
+                for e in raw_errors
+            ]
+            compilation_result = CompilationResult(
+                status=CompilationStatus.SUCCESS if succeeded else CompilationStatus.FAILED,
+                errors=parsed_errors,
+                stdout=compilation_context.get("stdout", ""),
+                stderr=compilation_context.get("stderr", ""),
+                exit_code=0 if succeeded else 1,
+            )
+            compilation_skipped = False
         else:
             logger.info("⚠️ No compilation context provided - semantic analysis only")
-
-        # Step 2.5: Check code safety using ChromaDB + LLM reasoning
-        self._ensure_semantic_search()
         
-        if self.semantic_search:
-            similar_files = self.semantic_search.search_similar_files(
-                code=code,
-                top_k=5,
-                raw_resources=[r for resources in self._raw_resources.values() for r in resources]
+        similar_files = self.semantic_search.search_similar_files(
+            code=code,
+            top_k=5,
+            raw_resources=[r for resources in (self._raw_resources or {}).values() for r in resources]
+        )
+
+        llm_safety_check = await self._check_safety_with_llm(
+            code=code,
+            similar_files=similar_files,
+            compilation_result=compilation_result
+        )
+
+        if not llm_safety_check.get("is_safe", True):
+            logger.warning(f"Code blocked by LLM safety check: {llm_safety_check.get('reasoning', 'Unknown reason')}")
+
+            audit_id = self.audit_trail.log_compilation(
+                code_hash=code_hash,
+                module_name=module_name,
+                result=compilation_result,
+                auth_model=None,
+                blocked=True,
             )
-            
-            # Let LLM reason about code safety with similar examples as context
-            llm_safety_check = await self._check_safety_with_llm(
-                code=code,
+
+            return SafetyCheckResult(
+                passed=False,
+                compilation_result=compilation_result,
+                authorization_model=None,
+                blocked_reason=llm_safety_check.get("reasoning", "LLM safety check failed"),
+                safety_certificate=None,
+                audit_id=audit_id,
+                compilation_skipped=compilation_skipped,
+                llm_insights=llm_safety_check.get("full_response"),
                 similar_files=similar_files,
-                compilation_result=compilation_result
             )
-            
-            if not llm_safety_check.get("is_safe", True):
-                # Block with LLM reasoning
-                logger.warning(f"Code blocked by LLM safety check: {llm_safety_check.get('reasoning', 'Unknown reason')}")
-                
-                audit_id = self.audit_trail.log_compilation(
-                    code_hash=code_hash,
-                    module_name=module_name,
-                    result=compilation_result,
-                    auth_model=None,
-                    blocked=True,
-                )
-                
-                return SafetyCheckResult(
-                    passed=False,
-                    compilation_result=compilation_result,
-                    authorization_model=None,
-                    blocked_reason=llm_safety_check.get("reasoning", "LLM safety check failed"),
-                    safety_certificate=None,
-                    audit_id=audit_id,
-                    compilation_skipped=compilation_skipped,
-                    llm_insights=llm_safety_check.get("full_response"),
-                    similar_files=similar_files  # Already limited to 5
-                )
 
         # Step 3: Extract authorization model with confidence scoring
         auth_extraction = self.auth_validator.extract_auth_model(code, compilation_result)
