@@ -265,7 +265,7 @@ FILE {i}: {file.get('file_path', 'unknown')} (similarity: {file.get('similarity_
         similar_files = self.semantic_search.search_similar_files(
             code=code,
             top_k=5,
-            raw_resources=[r for resources in self._raw_resources.values() for r in resources]
+            raw_resources=[r for resources in (self._raw_resources or {}).values() for r in resources]
         )
 
         llm_safety_check = await self._check_safety_with_llm(

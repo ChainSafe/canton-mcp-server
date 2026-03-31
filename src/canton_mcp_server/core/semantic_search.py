@@ -390,13 +390,19 @@ class DAMLSemanticSearch:
         ])
         logger.info(f"🔍 Found {len(result_ids)} semantically similar files via ChromaDB:\n{all_similarities}")
         
-        # Build O(1) lookup by file_path to avoid O(n*k) linear scan
+        from ..env import get_env
+
+        # Build O(1) lookup keyed on (source_repo, file_path) — file_path alone is
+        # not unique across repos (e.g. README.md exists in all three).
         if raw_resources:
-            lookup = {r.get("file_path", ""): r for r in raw_resources}
+            lookup = {
+                (r.get("source_repo", ""), r.get("file_path", "")): r
+                for r in raw_resources
+            }
             relevant_resources = []
             for metadata, distance in zip(result_metadatas, result_distances):
-                file_path = metadata.get("file_path", "")
-                resource = lookup.get(file_path)
+                key = (metadata.get("source_repo", ""), metadata.get("file_path", ""))
+                resource = lookup.get(key)
                 if resource:
                     resource_copy = resource.copy()
                     resource_copy["similarity_score"] = 1.0 - distance
@@ -418,11 +424,10 @@ class DAMLSemanticSearch:
         relevant_resources = [r for r in relevant_resources if r.get("similarity_score", 0) >= min_score]
 
         # Re-read file content from disk so LLM receives actual code, not empty strings
-        canonical_docs = Path(_default_persist_dir()).parent  # fallback
         try:
             canonical_docs = Path(get_env("CANONICAL_DOCS_PATH", "../../canonical-daml-docs"))
         except Exception:
-            pass
+            canonical_docs = Path("../../canonical-daml-docs")
 
         for r in relevant_resources:
             source_repo = r.get("source_repo", "")
@@ -431,7 +436,8 @@ class DAMLSemanticSearch:
                 abs_path = canonical_docs / source_repo / file_path
                 try:
                     r["content"] = abs_path.read_text(encoding="utf-8")
-                except OSError:
+                except (OSError, UnicodeDecodeError) as e:
+                    logger.debug("Failed to read content from %s: %s", abs_path, e)
                     r["content"] = ""
             else:
                 r["content"] = ""
