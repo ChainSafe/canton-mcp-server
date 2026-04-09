@@ -71,7 +71,7 @@ class SafetyChecker:
                 except ImportError as e:
                     logger.warning(f"[DIAG] anthropic import failed: {e}")
             else:
-                logger.info(f"[DIAG] LLM auth extraction SKIPPED")
+                logger.info("[DIAG] LLM auth extraction SKIPPED")
             
             confidence_threshold = get_env_float("LLM_AUTH_CONFIDENCE_THRESHOLD", 0.7)
             auth_validator = AuthorizationValidator(
