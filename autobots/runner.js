@@ -148,7 +148,7 @@ async function runOnce(agent, tasks, opts) {
     }
   } else {
     // Sequential
-    for (const task of tasks) {
+    for (const [i, task] of tasks.entries()) {
       const result = await agent.executeTask(task);
       results.push(result);
 
@@ -157,7 +157,7 @@ async function runOnce(agent, tasks, opts) {
         `  [${icon}] ${result.taskId}: ${result.action} (${result.confidence.toFixed(2)}) ${result.durationMs}ms`
       );
 
-      if (tasks.indexOf(task) < tasks.length - 1) {
+      if (i < tasks.length - 1) {
         await sleep(opts.interval);
       }
     }

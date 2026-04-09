@@ -111,7 +111,8 @@ class SafetyChecker:
             }
 
         api_key = get_env("ANTHROPIC_API_KEY", "")
-        logger.info(f"[DIAG] _check_safety_with_llm: api_key={'set (len=' + str(len(api_key)) + ')' if api_key else 'EMPTY'}")
+        api_key_status = f"set (len={len(api_key)})" if api_key else "EMPTY"
+        logger.info(f"[DIAG] _check_safety_with_llm: api_key={api_key_status}")
         if not api_key:
             raise RuntimeError("ANTHROPIC_API_KEY is required for safety checking but is not set")
 
