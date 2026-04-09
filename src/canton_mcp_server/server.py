@@ -538,7 +538,7 @@ After top-up, return to Cursor and your tools will work again.
                             )
                             logger.info(f"ChargeReceipt created (streaming): {charge_contract_id}")
                         except Exception as e:
-                            logger.error(f"Failed to create ChargeReceipt: {e}")
+                            logger.critical(f"BILLING INTEGRITY: Failed to create ChargeReceipt for {party_id}/{tool_name}/{price_cc}CC: {e}")
                     asyncio.create_task(create_charge())
                     logger.info(f"Creating ChargeReceipt (streaming): {tool_name} - {price_cc} CC from {party_id}")
             except Exception as e:
@@ -600,7 +600,7 @@ After top-up, return to Cursor and your tools will work again.
                     )
                     logger.info(f"ChargeReceipt created on-chain: {tool_name} - {price_cc} CC from {party_id} (contract: {charge_contract_id})")
             except Exception as e:
-                logger.error(f"Failed to create ChargeReceipt: {e}")
+                logger.critical(f"BILLING INTEGRITY: Failed to create ChargeReceipt for {party_id}/{tool_name}/{price_cc}CC: {e}")
 
         # Broadcast payment-required after response is generated (optimistic mode)
         # Reuse party_id from security gate (no env fallback)

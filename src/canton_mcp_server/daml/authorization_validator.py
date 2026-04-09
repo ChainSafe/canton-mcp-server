@@ -10,6 +10,7 @@ import logging
 import re
 from typing import Dict, List, Optional
 
+from ..env import get_env
 from .types import AuthorizationModel, AuthorizationExtractionResult, CompilationResult
 
 logger = logging.getLogger(__name__)
@@ -453,7 +454,7 @@ Example: If "controller approver" has "assertMsg (approver `elem` approvers)", t
 If you see interesting patterns worth explaining, add a paragraph after the JSON explaining them. This helps developers understand their code better."""
 
             response = self.llm_client.messages.create(
-                model="claude-3-5-haiku-20241022",
+                model=get_env("LLM_ENRICHMENT_MODEL"),
                 max_tokens=2000,
                 temperature=0.0,  # Deterministic
                 messages=[{"role": "user", "content": prompt}]
