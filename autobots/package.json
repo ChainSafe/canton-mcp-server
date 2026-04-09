@@ -1,0 +1,10 @@
+{
+  "name": "autobots",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Liveliness and e2e load testing agent for Canton MCP Server",
+  "scripts": {
+    "test": "node runner.js --help",
+    "start": "node runner.js"
+  }
+}

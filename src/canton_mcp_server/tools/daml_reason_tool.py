@@ -155,64 +155,66 @@ class DamlReasonTool(Tool[DamlReasonParams, DamlReasonResult]):
         with self._semantic_search_lock:
             if self._semantic_search is not None:
                 return  # Double-check after acquiring lock
-            logger.info("🔍 Initializing semantic search...")
-            
-            # Load raw resources directly from repos (no enrichment, no caching)
-            raw_by_category = self.loader.scan_repositories(force_refresh=False)
-            
-            # Flatten all resources into a single list
-            all_resources = []
-            for category, resources in raw_by_category.items():
-                all_resources.extend(resources)
-            
-            logger.info(f"📚 Loaded {len(all_resources)} raw resources from canonical repos")
+            try:
+                logger.info("🔍 Initializing semantic search...")
 
-            if not all_resources:
-                logger.info("📦 No resources from file scan — will use pre-built ChromaDB index if available")
+                # Load raw resources directly from repos (no enrichment, no caching)
+                raw_by_category = self.loader.scan_repositories(force_refresh=False)
 
-            # Initialize ChromaDB semantic search (indexes raw content directly)
-            self._semantic_search = create_semantic_search(
-                raw_resources=all_resources,
-                force_reindex=False  # Persist across restarts
-            )
+                # Flatten all resources into a single list
+                all_resources = []
+                for category, resources in raw_by_category.items():
+                    all_resources.extend(resources)
 
-            if self._semantic_search:
-                stats = self._semantic_search.get_stats()
-                count = stats['indexed_count']
-                if count > 0 and not all_resources:
-                    logger.info(f"✅ Using pre-built ChromaDB index: {count} resources")
-                elif count > 0:
-                    logger.info(f"✅ Semantic search ready: {count} resources indexed")
+                logger.info(f"📚 Loaded {len(all_resources)} raw resources from canonical repos")
+
+                if not all_resources:
+                    logger.info("📦 No resources from file scan — will use pre-built ChromaDB index if available")
+
+                # Initialize ChromaDB semantic search (indexes raw content directly)
+                self._semantic_search = create_semantic_search(
+                    raw_resources=all_resources,
+                    force_reindex=False  # Persist across restarts
+                )
+
+                if self._semantic_search:
+                    stats = self._semantic_search.get_stats()
+                    count = stats['indexed_count']
+                    if count > 0 and not all_resources:
+                        logger.info(f"✅ Using pre-built ChromaDB index: {count} resources")
+                    elif count > 0:
+                        logger.info(f"✅ Semantic search ready: {count} resources indexed")
+                    else:
+                        logger.warning("⚠️ ChromaDB index is empty — daml_reason will return 0 patterns")
                 else:
-                    logger.warning("⚠️ ChromaDB index is empty — daml_reason will return 0 patterns")
-            else:
-                logger.warning("⚠️ Semantic search unavailable - falling back to basic recommendations")
+                    logger.warning("⚠️ Semantic search unavailable - falling back to basic recommendations")
 
-            # Keep only lightweight metadata for search result lookups — drop full file
-            # content from memory. Search results only need name, file_path, description.
-            # On a 2GB box this saves ~100-200MB of Python object overhead.
-            self._raw_resources = {
-                category: [
-                    {
-                        "name": r.get("name", ""),
-                        "file_path": r.get("file_path", ""),
-                        "description": r.get("description", ""),
-                        "source_repo": r.get("source_repo", ""),
-                        "source_commit": r.get("source_commit", ""),
-                        "canonical_hash": r.get("canonical_hash", ""),
-                        "similarity_score": 0.0,
-                    }
-                    for r in resources
-                ]
-                for category, resources in raw_by_category.items()
-            }
+                # Keep only lightweight metadata for search result lookups
+                self._raw_resources = {
+                    category: [
+                        {
+                            "name": r.get("name", ""),
+                            "file_path": r.get("file_path", ""),
+                            "description": r.get("description", ""),
+                            "source_repo": r.get("source_repo", ""),
+                            "source_commit": r.get("source_commit", ""),
+                            "canonical_hash": r.get("canonical_hash", ""),
+                            "similarity_score": 0.0,
+                        }
+                        for r in resources
+                    ]
+                    for category, resources in raw_by_category.items()
+                }
 
-            # Free the loader's in-memory cache — full content is no longer needed
-            self.loader._cached_resources = {}
+                # Free the loader's in-memory cache
+                self.loader._cached_resources = {}
 
-            # Share with SafetyChecker so it doesn't create its own loader + ChromaDB copy
-            self.safety_checker.semantic_search = self._semantic_search
-            self.safety_checker._raw_resources = self._raw_resources
+                # Share with SafetyChecker
+                self.safety_checker.semantic_search = self._semantic_search
+                self.safety_checker._raw_resources = self._raw_resources
+            except Exception as e:
+                logger.error(f"[DIAG] _ensure_semantic_search FAILED: {e}", exc_info=True)
+                raise
 
     async def execute(
         self, ctx: ToolContext[DamlReasonParams, DamlReasonResult]
@@ -301,7 +303,9 @@ class DamlReasonTool(Tool[DamlReasonParams, DamlReasonResult]):
             logger.info("No compilation result - running semantic analysis")
         
         # Ensure semantic search is injected before safety checker needs it
+        logger.info(f"[DIAG] Pre _ensure_semantic_search: ss={self._semantic_search is not None}, raw={self._raw_resources is not None}")
         self._ensure_semantic_search()
+        logger.info(f"[DIAG] Post _ensure_semantic_search: ss={self._semantic_search is not None}, raw={self._raw_resources is not None}, checker_ss={self.safety_checker.semantic_search is not None}, checker_raw={self.safety_checker._raw_resources is not None}")
 
         # Run Gate 1 safety check with compilation context
         module_name = self._extract_module_name(daml_code) or "Main"
@@ -312,15 +316,15 @@ class DamlReasonTool(Tool[DamlReasonParams, DamlReasonResult]):
                 compilation_context=ctx.params.compilation_result
             )
         except RuntimeError as e:
-            logger.error(f"Safety check failed: {e}")
+            logger.error(f"[DIAG] Safety check failed: {e}", exc_info=True)
             yield ctx.structured(DamlReasonResult(
                 action="delegate",
                 valid=False,
                 confidence=0.0,
                 issues=[],
                 business_intent=business_intent,
-                delegation_reason="Service temporarily unavailable — analysis requires LLM connectivity",
-                reasoning="Safety check could not complete. Ensure ANTHROPIC_API_KEY is set and ENABLE_LLM_ENRICHMENT=true.",
+                delegation_reason=f"Service temporarily unavailable — {str(e)}",
+                reasoning=f"Safety check could not complete: {str(e)}",
             ))
             return
         
@@ -476,9 +480,10 @@ This will provide specific line-by-line errors that can help identify the issues
 
             context = "\n\n".join(context_parts)
 
+            from ..env import get_env
             response = await asyncio.to_thread(
                 llm_client.messages.create,
-                model="claude-3-5-haiku-20241022",
+                model=get_env("LLM_ENRICHMENT_MODEL"),
                 max_tokens=1500,
                 messages=[{
                     "role": "user",
