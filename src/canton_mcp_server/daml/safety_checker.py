@@ -56,17 +56,22 @@ class SafetyChecker:
         # Initialize AuthorizationValidator with LLM support if enabled
         if auth_validator is None:
             llm_client = None
-            if get_env_bool("ENABLE_LLM_AUTH_EXTRACTION", True) and get_env_bool("ENABLE_LLM_ENRICHMENT", False):
+            auth_flag = get_env_bool("ENABLE_LLM_AUTH_EXTRACTION", True)
+            enrich_flag = get_env_bool("ENABLE_LLM_ENRICHMENT", False)
+            logger.info(f"[DIAG] SafetyChecker init: AUTH_EXTRACTION={auth_flag}, ENRICHMENT={enrich_flag}")
+            if auth_flag and enrich_flag:
                 try:
                     from anthropic import Anthropic
                     api_key = get_env("ANTHROPIC_API_KEY", "")
                     if api_key:
                         llm_client = Anthropic(api_key=api_key)
-                        logger.info("✅ LLM-enhanced authorization extraction enabled")
+                        logger.info(f"[DIAG] Anthropic client created (model={get_env('LLM_ENRICHMENT_MODEL', 'default')})")
                     else:
-                        logger.warning("ENABLE_LLM_AUTH_EXTRACTION=true but ANTHROPIC_API_KEY not set")
-                except ImportError:
-                    logger.warning("anthropic package not installed, LLM auth extraction disabled")
+                        logger.warning("[DIAG] ANTHROPIC_API_KEY is empty string")
+                except ImportError as e:
+                    logger.warning(f"[DIAG] anthropic import failed: {e}")
+            else:
+                logger.info("[DIAG] LLM auth extraction SKIPPED")
             
             confidence_threshold = get_env_float("LLM_AUTH_CONFIDENCE_THRESHOLD", 0.7)
             auth_validator = AuthorizationValidator(
@@ -106,6 +111,8 @@ class SafetyChecker:
             }
 
         api_key = get_env("ANTHROPIC_API_KEY", "")
+        api_key_status = f"set (len={len(api_key)})" if api_key else "EMPTY"
+        logger.info(f"[DIAG] _check_safety_with_llm: api_key={api_key_status}")
         if not api_key:
             raise RuntimeError("ANTHROPIC_API_KEY is required for safety checking but is not set")
 
@@ -125,9 +132,10 @@ class SafetyChecker:
                 compilation_status = "✗ Failed"
             
             # Ask LLM to reason about code safety
+            logger.info(f"[DIAG] Calling Anthropic: model={get_env('LLM_ENRICHMENT_MODEL')}, code_len={len(code)}, similar_files={len(similar_files)}")
             response = await asyncio.to_thread(
                 llm_client.messages.create,
-                model="claude-3-5-haiku-20241022",
+                model=get_env("LLM_ENRICHMENT_MODEL"),
                 max_tokens=2000,
                 messages=[{
                     "role": "user",
@@ -191,7 +199,7 @@ Be specific and reference the similar files by their paths."""
         except RuntimeError:
             raise
         except Exception as e:
-            logger.error(f"LLM safety check failed: {e}")
+            logger.error(f"[DIAG] LLM safety check exception: {type(e).__name__}: {e}", exc_info=True)
             raise RuntimeError(f"LLM safety check failed: {e}") from e
 
     def _format_similar_files_for_llm(self, similar_files: list) -> str:
@@ -236,6 +244,7 @@ FILE {i}: {file.get('file_path', 'unknown')} (similarity: {file.get('similarity_
         logger.info(f"Starting safety check for module: {module_name}")
 
         if self.semantic_search is None or self._raw_resources is None:
+            logger.error(f"[DIAG] check_pattern_safety FAILING: semantic_search={self.semantic_search is not None}, _raw_resources={self._raw_resources is not None}")
             raise RuntimeError(
                 "SemanticSearch and _raw_resources must both be injected into SafetyChecker. "
                 "Ensure DamlReasonTool._ensure_semantic_search() runs before check_pattern_safety()."

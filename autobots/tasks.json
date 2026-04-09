@@ -1,0 +1,86 @@
+[
+  {
+    "id": "valid-iou",
+    "businessIntent": "Create a simple IOU contract with transfer capability",
+    "damlCode": "module Main where\n\ntemplate SimpleIOU\n  with\n    issuer: Party\n    owner: Party\n    amount: Decimal\n    currency: Text\n  where\n    signatory issuer\n    observer owner\n\n    choice Transfer : ContractId SimpleIOU\n      with\n        newOwner: Party\n      controller owner\n      do\n        create this with owner = newOwner",
+    "expectedAction": "approved",
+    "description": "Basic IOU with proper signatories and controller — should pass"
+  },
+  {
+    "id": "query-transfer-patterns",
+    "businessIntent": "How do I implement asset transfers in DAML?",
+    "query": "asset transfer patterns in DAML",
+    "expectedAction": "suggest_patterns",
+    "description": "Query-only — should return pattern recommendations from ChromaDB"
+  },
+  {
+    "id": "query-dvp-settlement",
+    "businessIntent": "What are the best patterns for delivery-versus-payment settlement?",
+    "query": "DvP settlement atomic swap",
+    "expectedAction": "suggest_patterns",
+    "description": "Query about DvP patterns — should find Daml Finance examples"
+  },
+  {
+    "id": "query-interfaces",
+    "businessIntent": "How do interfaces work in DAML 3.x for cross-template polymorphism?",
+    "query": "DAML interfaces cross-template",
+    "expectedAction": "suggest_patterns",
+    "description": "Query about DAML interfaces"
+  },
+  {
+    "id": "valid-escrow",
+    "businessIntent": "Build an escrow contract where a neutral agent holds funds",
+    "damlCode": "module Main where\n\ntemplate Escrow\n  with\n    buyer: Party\n    seller: Party\n    agent: Party\n    amount: Decimal\n  where\n    signatory buyer, agent\n    observer seller\n\n    choice Release : ()\n      controller agent\n      do return ()\n\n    choice Refund : ()\n      controller agent\n      do return ()",
+    "expectedAction": "approved",
+    "description": "Escrow with proper multi-party signatories"
+  },
+  {
+    "id": "bad-missing-signatory",
+    "businessIntent": "Create a contract for tracking ownership",
+    "damlCode": "module Main where\n\ntemplate BadOwnership\n  with\n    owner: Party\n    amount: Decimal\n  where\n    observer owner\n\n    choice Transfer : ContractId BadOwnership\n      with\n        newOwner: Party\n      controller owner\n      do\n        create this with owner = newOwner",
+    "expectedAction": "suggest_edits",
+    "description": "Missing signatory — should fail auth validation"
+  },
+  {
+    "id": "bad-unauthorized-controller",
+    "businessIntent": "Transfer contract with approval flow",
+    "damlCode": "module Main where\n\ntemplate BadTransfer\n  with\n    owner: Party\n    approver: Party\n  where\n    signatory owner\n    observer approver\n\n    choice Approve : ()\n      controller unknown\n      do return ()",
+    "expectedAction": "suggest_edits",
+    "description": "Controller 'unknown' is not a signatory or observer"
+  },
+  {
+    "id": "valid-voting",
+    "businessIntent": "Create a simple voting contract where proposal creator and voter are different parties",
+    "damlCode": "module Main where\n\ntemplate Proposal\n  with\n    proposer: Party\n    voter: Party\n    description: Text\n    accepted: Bool\n  where\n    signatory proposer\n    observer voter\n\n    choice Accept : ContractId Proposal\n      controller voter\n      do create this with accepted = True\n\n    choice Reject : ()\n      controller voter\n      do return ()",
+    "expectedAction": "approved",
+    "description": "Voting with correct signatory/observer/controller pattern"
+  },
+  {
+    "id": "query-upgrading",
+    "businessIntent": "Best practices for upgrading DAML templates without breaking existing contracts",
+    "query": "DAML template upgrade migration",
+    "expectedAction": "suggest_patterns",
+    "description": "Query about contract upgrades"
+  },
+  {
+    "id": "valid-multi-party",
+    "businessIntent": "Multi-party agreement that requires all parties to sign",
+    "damlCode": "module Main where\n\ntemplate Agreement\n  with\n    partyA: Party\n    partyB: Party\n    partyC: Party\n    terms: Text\n  where\n    signatory partyA, partyB, partyC\n\n    choice Amend : ContractId Agreement\n      with\n        newTerms: Text\n      controller partyA\n      do create this with terms = newTerms",
+    "expectedAction": "approved",
+    "description": "Multi-party agreement — controller is one of the signatories"
+  },
+  {
+    "id": "bad-signatory-controller-mismatch",
+    "businessIntent": "Create a coin contract with minting",
+    "damlCode": "module Main where\n\ntemplate Coin\n  with\n    issuer: Party\n    owner: Party\n    amount: Decimal\n  where\n    signatory issuer, owner\n\n    choice Transfer : ContractId Coin\n      with\n        newOwner: Party\n      controller newOwner\n      do create this with owner = newOwner",
+    "expectedAction": "suggest_edits",
+    "description": "Controller 'newOwner' is a choice parameter, not a template field — may flag as unauthorized"
+  },
+  {
+    "id": "query-holdings",
+    "businessIntent": "How does the Daml Finance library handle holdings and accounts?",
+    "query": "Daml Finance holdings accounts",
+    "expectedAction": "suggest_patterns",
+    "description": "Query about Daml Finance library"
+  }
+]

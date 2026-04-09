@@ -266,19 +266,19 @@ class PaymentHandler:
             try:
                 validated_params = tool.params_model(**arguments)
                 return tool.pricing.calculate_price(validated_params)
-            except Exception:
-                # Params invalid — fall back to base_price (not $0.01)
-                logger.warning(
-                    f"Param validation failed for '{tool_name}', using base_price ${tool.pricing.base_price}"
+            except Exception as e:
+                # Params invalid — fall back to base_price but log as error
+                logger.error(
+                    f"Param validation failed for '{tool_name}': {e}. Using base_price ${tool.pricing.base_price}"
                 )
                 return tool.pricing.base_price
 
         except Exception as e:
-            # Tool not found in registry
-            logger.warning(
-                f"Could not get price for '{tool_name}': {e}, defaulting to $0.01"
+            # Tool not found in registry — use base price, not arbitrary default
+            logger.error(
+                f"Could not get price for '{tool_name}': {e}. Defaulting to $0.00 (free)"
             )
-            return 0.01
+            return 0.0
 
     def _check_internal_api_key(self, request: Request) -> bool:
         """

@@ -219,7 +219,7 @@ class DAMLSemanticSearch:
             new_fingerprint = self._get_commit_hash_fingerprint(resources_to_index)
             stored_fingerprint = self.collection.metadata.get("commit_fingerprint", "")
             
-            if stored_fingerprint and stored_fingerprint == new_fingerprint and current_count > 0:
+            if new_fingerprint and stored_fingerprint == new_fingerprint and current_count > 0:
                 logger.info(
                     f"✅ Index up-to-date (commit fingerprint match, {current_count} resources)"
                 )
@@ -429,13 +429,19 @@ class DAMLSemanticSearch:
         except Exception:
             canonical_docs = Path("../../canonical-daml-docs")
 
+        MAX_FILE_SIZE_BYTES = 512_000  # 512KB — prevents OOM on huge files
+
         for r in relevant_resources:
             source_repo = r.get("source_repo", "")
             file_path = r.get("file_path", "")
             if source_repo and file_path:
                 abs_path = canonical_docs / source_repo / file_path
                 try:
-                    r["content"] = abs_path.read_text(encoding="utf-8")
+                    if abs_path.stat().st_size > MAX_FILE_SIZE_BYTES:
+                        logger.debug("Skipping oversized file %s (%d bytes)", abs_path, abs_path.stat().st_size)
+                        r["content"] = ""
+                    else:
+                        r["content"] = abs_path.read_text(encoding="utf-8")
                 except (OSError, UnicodeDecodeError) as e:
                     logger.debug("Failed to read content from %s: %s", abs_path, e)
                     r["content"] = ""
