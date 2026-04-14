@@ -199,8 +199,8 @@ Be specific and reference the similar files by their paths."""
         except RuntimeError:
             raise
         except Exception as e:
-            logger.error(f"[DIAG] LLM safety check exception: {type(e).__name__}: {e}", exc_info=True)
-            raise RuntimeError(f"LLM safety check failed: {e}") from e
+            logger.error(f"LLM safety check exception: {type(e).__name__}: {e}", exc_info=True)
+            raise RuntimeError(f"LLM safety check failed ({type(e).__name__}): {e}") from e
 
     def _format_similar_files_for_llm(self, similar_files: list) -> str:
         """Format similar files for LLM context."""

@@ -1,0 +1,19 @@
+services:
+  autobots:
+    build: .
+    container_name: autobots
+    restart: unless-stopped
+    volumes:
+      # Mount the Canton key file
+      - ${KEY_FILE:-./key.json}:/config/key.json:ro
+    environment:
+      - MCP_SERVER_URL=${MCP_SERVER_URL:-https://mcp-dev1.01.chainsafe.dev}
+      - LOOP_INTERVAL=${LOOP_INTERVAL:-60}
+      - STATUS_INTERVAL=${STATUS_INTERVAL:-60}
+      - TASK_INTERVAL=${TASK_INTERVAL:-5000}
+    # Logs go to stdout → docker logs / Loki
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

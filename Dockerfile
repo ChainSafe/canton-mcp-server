@@ -96,9 +96,9 @@ ENV PYTHONPATH="/app/src:$PYTHONPATH"
 # Expose MCP server port
 EXPOSE 7284
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:7284/health').read()" || exit 1
+# Readiness check — verifies LLM model and ChromaDB, not just HTTP 200
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:7284/ready').read()" || exit 1
 
 # Default command
 CMD ["canton-mcp-server"]

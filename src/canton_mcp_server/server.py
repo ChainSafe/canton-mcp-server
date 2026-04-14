@@ -127,6 +127,10 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting Canton MCP Server...")
 
+    # Validate critical configuration before accepting requests
+    from canton_mcp_server.startup_checks import validate_startup_config
+    app.state.readiness = validate_startup_config()
+
     # Log registered tools
     registry = get_registry()
     logger.info(f"✅ Registered {len(registry)} tools:")
@@ -831,11 +835,55 @@ async def handle_mcp_request(request: Request):
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
+    """Liveness probe — is the process alive?"""
     return {
         "status": "healthy",
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
+
+
+@app.get("/ready")
+async def readiness_check():
+    """Readiness probe — are critical dependencies functional?"""
+    checks = {}
+    all_ok = True
+
+    # Check 1: ChromaDB
+    try:
+        registry = get_registry()
+        tool = registry.get_tool("daml_reason")
+        if tool and tool._semantic_search is not None:
+            stats = tool._semantic_search.get_stats()
+            count = stats.get("indexed_count", 0)
+            checks["chromadb"] = {"status": "ok", "indexed_count": count}
+            if count == 0:
+                checks["chromadb"]["status"] = "degraded"
+                all_ok = False
+        else:
+            checks["chromadb"] = {"status": "initializing"}
+    except Exception as e:
+        checks["chromadb"] = {"status": "error", "error": str(e)[:200]}
+        all_ok = False
+
+    # Check 2: LLM model (validated at startup)
+    readiness = getattr(app.state, "readiness", {})
+    if readiness.get("llm_model_valid") is not None:
+        checks["llm"] = {
+            "status": "ok" if readiness["llm_model_valid"] else "error",
+            "model": readiness.get("llm_model_name", "unknown"),
+        }
+        if not readiness["llm_model_valid"]:
+            all_ok = False
+
+    status_code = 200 if all_ok else 503
+    return JSONResponse(
+        content={
+            "status": "ready" if all_ok else "not_ready",
+            "checks": checks,
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        },
+        status_code=status_code,
+    )
 
 
 # Topology transaction store: {party_id: [{topology_tx, hash}, ...]}
