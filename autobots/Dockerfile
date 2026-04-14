@@ -2,7 +2,7 @@ FROM node:22-alpine
 
 WORKDIR /app
 
-COPY package.json *.js *.json ./
+COPY package.json runner.js agent.js stats.js payment-adapter-canton.js payment-adapter-interface.js tasks.json ./
 
 # Runtime config via env vars
 ENV MCP_SERVER_URL=https://mcp-dev1.01.chainsafe.dev

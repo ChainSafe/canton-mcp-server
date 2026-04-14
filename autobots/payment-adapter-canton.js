@@ -133,9 +133,13 @@ export class CantonPaymentAdapter extends PaymentAdapter {
       const res = await fetch(
         `${billingPortalUrl}/api/balance?party=${encodeURIComponent(this.#partyId)}`
       );
-      if (!res.ok) return { balance: 0, totalCharged: 0, totalCredited: 0 };
+      if (!res.ok) {
+        console.log(`[WARN] ${new Date().toISOString()} Balance check failed: HTTP ${res.status}`);
+        return { balance: 0, totalCharged: 0, totalCredited: 0 };
+      }
       return await res.json();
-    } catch {
+    } catch (err) {
+      console.log(`[WARN] ${new Date().toISOString()} Balance check error: ${err.message}`);
       return { balance: 0, totalCharged: 0, totalCredited: 0 };
     }
   }

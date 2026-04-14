@@ -97,7 +97,7 @@ def validate_startup_config() -> dict:
             try:
                 from anthropic import Anthropic
                 client = Anthropic(api_key=api_key, timeout=10.0)
-                response = client.messages.create(
+                client.messages.create(
                     model=model,
                     max_tokens=1,
                     messages=[{"role": "user", "content": "ping"}],
