@@ -93,6 +93,12 @@ ENV_VALUES["DCAP_SERVER_NAME"] = os.getenv("DCAP_SERVER_NAME", "Canton MCP Serve
 # In production, these should be extracted from X-Caller-ID header and x402 payment
 ENV_VALUES["DCAP_DEFAULT_CALLER"] = os.getenv("DCAP_DEFAULT_CALLER", "unknown-client")
 ENV_VALUES["DCAP_DEFAULT_PAYER"] = os.getenv("DCAP_DEFAULT_PAYER", "0x0000000000000000000000000000000000000000")
+ENV_VALUES["DCAP_SERVER_URL"] = os.getenv("DCAP_SERVER_URL", "")
+ENV_VALUES["DCAP_DISCOVER_INTERVAL_SEC"] = os.getenv("DCAP_DISCOVER_INTERVAL_SEC", "300")
+
+# Semantic Search Configuration
+ENV_VALUES["CANONICAL_DOCS_PATH"] = os.getenv("CANONICAL_DOCS_PATH", "../../canonical-daml-docs")
+ENV_VALUES["MIN_SIMILARITY_THRESHOLD"] = os.getenv("MIN_SIMILARITY_THRESHOLD", "0.3")
 
 # ChromaDB Configuration
 ENV_VALUES["CHROMA_PERSIST_DIR"] = os.getenv(
@@ -126,10 +132,17 @@ ENV_VALUES["BILLING_ENABLED"] = os.getenv("BILLING_ENABLED", "false")
 ENV_VALUES["BILLING_API_KEY"] = os.getenv("BILLING_API_KEY", "")
 ENV_VALUES["MIN_BALANCE_THRESHOLD"] = os.getenv("MIN_BALANCE_THRESHOLD", "-2.0")
 ENV_VALUES["BILLING_PACKAGE_ID"] = os.getenv("BILLING_PACKAGE_ID", "")
+ENV_VALUES["CANTON_LEDGER_URL"] = os.getenv("CANTON_LEDGER_URL", "")
 
 # Canton 3.4 gRPC Flow via Billing Portal
 ENV_VALUES["USE_CANTON_34_FLOW"] = os.getenv("USE_CANTON_34_FLOW", "false")
 ENV_VALUES["BILLING_PORTAL_URL"] = os.getenv("BILLING_PORTAL_URL", "http://localhost:3050")
+
+# Canton payment defaults
+ENV_VALUES["CANTON_DEFAULT_PAYER_PARTY"] = os.getenv("CANTON_DEFAULT_PAYER_PARTY", "")
+
+# Isolated environment flag (also read directly via os.environ at module level)
+ENV_VALUES["IS_ISOLATED_ENVIRONMENT"] = os.getenv("IS_ISOLATED_ENVIRONMENT", "false")
 
 
 def get_env(key: str, default: str = "") -> str:
