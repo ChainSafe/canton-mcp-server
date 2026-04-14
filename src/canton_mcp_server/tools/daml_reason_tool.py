@@ -316,15 +316,17 @@ class DamlReasonTool(Tool[DamlReasonParams, DamlReasonResult]):
                 compilation_context=ctx.params.compilation_result
             )
         except RuntimeError as e:
-            logger.error(f"[DIAG] Safety check failed: {e}", exc_info=True)
+            logger.error(f"Safety check failed: {e}", exc_info=True)
+            root_cause = e.__cause__ or e
+            error_detail = f"{type(root_cause).__name__}: {root_cause}"
             yield ctx.structured(DamlReasonResult(
                 action="delegate",
                 valid=False,
                 confidence=0.0,
-                issues=[],
+                issues=[error_detail],
                 business_intent=business_intent,
-                delegation_reason=f"Service temporarily unavailable — {str(e)}",
-                reasoning=f"Safety check could not complete: {str(e)}",
+                delegation_reason=f"Safety check failed: {error_detail}",
+                reasoning=f"Safety check could not complete: {error_detail}",
             ))
             return
         

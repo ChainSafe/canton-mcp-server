@@ -6,7 +6,7 @@
  * 2. Calls daml_reason with the task
  * 3. Parses the response (action, confidence, issues)
  * 4. Compares to expected outcome
- * 5. Returns structured result
+ * 5. Returns structured result with full error detail (no silent fails)
  */
 
 import { CantonPaymentAdapter } from "./payment-adapter-canton.js";
@@ -36,6 +36,21 @@ import { CantonPaymentAdapter } from "./payment-adapter-canton.js";
  * @property {string} timestamp
  */
 
+const iso = () => new Date().toISOString();
+
+function logEvent(name, fields = {}) {
+  const parts = [`[EVENT]`, iso(), name];
+  for (const [k, v] of Object.entries(fields)) {
+    const val = typeof v === "string" ? (v.includes(" ") ? JSON.stringify(v) : v) : v;
+    parts.push(`${k}=${val}`);
+  }
+  console.log(parts.join(" "));
+}
+
+function logWarn(message) {
+  console.log(`[WARN] ${iso()} ${message}`);
+}
+
 export class Agent {
   #adapter;
   #serverUrl;
@@ -63,8 +78,16 @@ export class Agent {
   async executeTask(task) {
     if (!this.#authenticated) throw new Error("Not authenticated");
 
+    logEvent("task_start", { taskId: task.id });
+
     // Refresh token if needed
-    await this.#adapter.refreshToken(this.#serverUrl);
+    try {
+      await this.#adapter.refreshToken(this.#serverUrl);
+    } catch (err) {
+      const error = `AUTH_REFRESH_FAILED: ${err.message}`;
+      logEvent("task_error", { taskId: task.id, error });
+      return this.#errorResult(task, error, 0);
+    }
 
     const start = Date.now();
     const partyId = this.#adapter.partyId;
@@ -79,39 +102,49 @@ export class Agent {
       mcpUrl.searchParams.set("payerParty", partyId);
       mcpUrl.searchParams.set("businessIntent", task.businessIntent);
 
-      const res = await fetch(mcpUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${this.#adapter.token}`,
-        },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          method: "tools/call",
-          params: { name: "daml_reason", arguments: args },
-          id: task.id,
-        }),
-      });
+      let res;
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 60_000);
+        res = await fetch(mcpUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${this.#adapter.token}`,
+          },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            method: "tools/call",
+            params: { name: "daml_reason", arguments: args },
+            id: task.id,
+          }),
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+      } catch (fetchErr) {
+        const durationMs = Date.now() - start;
+        const code = fetchErr.cause?.code || fetchErr.code || "FETCH_ERROR";
+        const error = `NETWORK_${code}: ${fetchErr.message}`;
+        logEvent("task_error", { taskId: task.id, error, durationMs });
+        return this.#errorResult(task, error, durationMs);
+      }
 
       const durationMs = Date.now() - start;
 
       if (!res.ok) {
-        return this.#errorResult(
-          task,
-          `HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`,
-          durationMs
-        );
+        const body = (await res.text()).slice(0, 500);
+        const error = `HTTP_${res.status}: ${body}`;
+        logEvent("task_error", { taskId: task.id, error, durationMs });
+        return this.#errorResult(task, error, durationMs);
       }
 
       const data = await res.json();
 
       // Handle JSON-RPC error
       if (data.error) {
-        return this.#errorResult(
-          task,
-          `RPC error: ${data.error.message || JSON.stringify(data.error)}`,
-          durationMs
-        );
+        const error = `RPC_${data.error.code || "ERR"}: ${data.error.message || JSON.stringify(data.error)}`;
+        logEvent("task_error", { taskId: task.id, error, durationMs });
+        return this.#errorResult(task, error, durationMs);
       }
 
       // Parse structured content
@@ -121,10 +154,23 @@ export class Agent {
       const issues = sc.issues || [];
       const llmInsights = sc.llmInsights || null;
 
+      // Surface server-side errors (delegate with a failure reason)
+      if (action === "delegate" && sc.delegationReason) {
+        logWarn(`Server returned delegate: taskId=${task.id} reason="${sc.delegationReason}"`);
+      }
+
       // Determine pass/fail
       const pass = task.expectedAction
         ? action === task.expectedAction
         : true; // No expectation = informational
+
+      logEvent("task_end", {
+        taskId: task.id,
+        action,
+        pass,
+        confidence: confidence.toFixed(2),
+        durationMs,
+      });
 
       return {
         taskId: task.id,
@@ -140,7 +186,10 @@ export class Agent {
         timestamp: new Date().toISOString(),
       };
     } catch (err) {
-      return this.#errorResult(task, err.message, Date.now() - start);
+      const durationMs = Date.now() - start;
+      const error = `${err.constructor.name}: ${err.message}`;
+      logEvent("task_error", { taskId: task.id, error, durationMs, stack: err.stack?.split("\n")[1]?.trim() });
+      return this.#errorResult(task, error, durationMs);
     }
   }
 

@@ -42,6 +42,40 @@ node runner.js --key ~/.canton/test-billing-user-key.json --server https://mcp-d
 - No external dependencies
 - A Canton key file (generated via the billing portal setup wizard)
 
+## Docker Deployment
+
+**Build and run:**
+```bash
+# With docker-compose (easiest)
+KEY_FILE=~/.canton/bot-key.json MCP_SERVER_URL=https://mcp-server.chainsafe.io docker compose up -d
+
+# Or build and run directly
+docker build -t autobots .
+docker run -d --name autobots \
+  -v ~/.canton/bot-key.json:/config/key.json:ro \
+  -e MCP_SERVER_URL=https://mcp-server.chainsafe.io \
+  autobots
+```
+
+**Environment variables:**
+
+| Var | Default | Description |
+|-----|---------|-------------|
+| `MCP_SERVER_URL` | `https://mcp-dev1.01.chainsafe.dev` | MCP server to test against |
+| `KEY_FILE` | `/config/key.json` | Path to Canton key file inside container |
+| `LOOP_INTERVAL` | `60` | Seconds between iterations |
+| `STATUS_INTERVAL` | `60` | Seconds between `[STATUS]` logs |
+| `TASK_INTERVAL` | `5000` | Milliseconds between tasks |
+
+**View logs:**
+```bash
+docker logs -f autobots
+docker logs autobots 2>&1 | grep STATUS
+docker logs autobots 2>&1 | grep CRITICAL
+```
+
+**For K8s:** Use the Dockerfile as-is. Mount the key file as a Secret volume at `/config/key.json`. Set env vars via ConfigMap.
+
 ## How It Works
 
 1. **Authenticates** via Ed25519 challenge-response → gets JWT token
@@ -63,13 +97,53 @@ node runner.js --key ~/.canton/test-billing-user-key.json --server https://mcp-d
 
 ## Output
 
+### Single-run mode (no `--loop`)
+
+A summary table after all tasks complete:
+
 ```
 Task                           | Action             | Expected   | Pass  | CC     | Time
 valid-iou                      | approved           | approved   | PASS  | 0.10   | 2.3s
 query-transfer-patterns        | suggest_patterns   | suggest_p  | PASS  | 0.10   | 1.8s
-bad-missing-signatory          | suggest_edits      | suggest_e  | PASS  | 0.10   | 3.1s
 ...
 Total: 10/12 passed, 2 failed, 0 errors | 1.20 CC spent | avg 2.4s
+```
+
+### Loop mode (24/7 liveliness) — structured logs
+
+All logs are **single-line** and grep-friendly for Loki/journalctl:
+
+**Per-task events** (every task):
+```
+[EVENT] 2026-04-13T17:42:00.123Z task_start taskId=valid-iou
+[EVENT] 2026-04-13T17:42:02.345Z task_end taskId=valid-iou action=approved pass=true confidence=1.00 durationMs=2222
+[EVENT] 2026-04-13T17:42:05.678Z task_error taskId=bad-auth error=HTTP_500:...
+[EVENT] 2026-04-13T17:42:10.900Z auth_ok
+```
+
+**Periodic status** (every `--status-interval` seconds, default 60):
+```
+[STATUS] 2026-04-13T17:42:00Z uptime=2h34m | last_min: tasks=2 passed=2 errors=0 | hour: tasks=119 pass_rate=97.5% cc=11.90 avg=2350ms p95=4800ms | total: tasks=253 pass_rate=97.7% cc=25.30 iter=23
+```
+
+**Warnings & alerts**:
+```
+[WARN] 2026-04-13T17:42:00Z Server returned delegate: taskId=valid-iou reason="Safety check failed (NotFoundError): model not found"
+[CRITICAL] 2026-04-13T17:42:00Z 3 consecutive iterations with 100% error rate — possible server outage
+```
+
+### Watching logs
+
+**Local (systemd)**:
+```bash
+sudo journalctl -fu autobots | grep -E "STATUS|CRITICAL"
+```
+
+**Grafana/Loki**:
+```
+{container="autobots"} |= "[STATUS]"              # just periodic status
+{container="autobots"} |= "[EVENT] task_error"    # just errors
+{container="autobots"} |~ "CRITICAL|WARN"         # anything needing attention
 ```
 
 ## Custom Tasks

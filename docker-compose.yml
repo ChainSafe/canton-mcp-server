@@ -23,7 +23,8 @@ services:
       - IS_ISOLATED_ENVIRONMENT=true
       # Canonical DAML documentation path
       - CANONICAL_DOCS_PATH=/opt/canonical-daml-docs
-      # Use pre-built ChromaDB index from Docker image
+      # CRITICAL: Must match the path used in Dockerfile's pre-build step.
+      # If omitted, defaults to ~/.canton-mcp/chroma_db (empty — ignores pre-built index).
       - CHROMA_PERSIST_DIR=/app/chroma_db
       # Limit ONNX runtime thread pools (avoids over-allocation on shared hosts)
       - OMP_NUM_THREADS=2

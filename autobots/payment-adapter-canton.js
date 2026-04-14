@@ -49,27 +49,43 @@ export class CantonPaymentAdapter extends PaymentAdapter {
 
   async refreshToken(serverUrl) {
     if (Date.now() < this.#tokenExpiresAt - 60_000) {
-      return { token: this.#token };
+      return { token: this.#token }; // Still valid, skip refresh
     }
     return this.#doAuth(serverUrl);
   }
 
   async #doAuth(serverUrl) {
+    const iso = () => new Date().toISOString();
+    console.log(`[EVENT] ${iso()} auth_start partyId=${this.#partyId.slice(0, 40)}`);
+
     // Step 1: Request challenge
-    const challengeRes = await fetch(`${serverUrl}/auth/challenge`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        partyId: this.#partyId,
-        publicKey: this.#publicKeyB64,
-      }),
-    });
-    if (!challengeRes.ok) {
-      throw new Error(
-        `Challenge failed: ${challengeRes.status} ${await challengeRes.text()}`
-      );
+    let challengeRes;
+    try {
+      challengeRes = await fetch(`${serverUrl}/auth/challenge`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          partyId: this.#partyId,
+          publicKey: this.#publicKeyB64,
+        }),
+      });
+    } catch (err) {
+      const code = err.cause?.code || err.code || "FETCH_ERROR";
+      console.log(`[EVENT] ${iso()} auth_error phase=challenge code=${code} error=${JSON.stringify(err.message)}`);
+      throw new Error(`AUTH_FAILED (network ${code}): ${err.message}`);
     }
-    const { challenge } = await challengeRes.json();
+
+    if (!challengeRes.ok) {
+      const body = await challengeRes.text();
+      console.log(`[EVENT] ${iso()} auth_error phase=challenge status=${challengeRes.status} body=${JSON.stringify(body.slice(0, 500))}`);
+      throw new Error(`AUTH_FAILED (challenge HTTP ${challengeRes.status}): ${body}`);
+    }
+    const challengeData = await challengeRes.json();
+    const challenge = challengeData?.challenge;
+    if (!challenge) {
+      console.log(`[EVENT] ${iso()} auth_error phase=challenge error="No challenge in response: ${JSON.stringify(challengeData).slice(0, 200)}"`);
+      throw new Error(`AUTH_FAILED (no challenge in response)`);
+    }
 
     // Step 2: Sign challenge
     const challengeBytes = Buffer.from(challenge, "base64");
@@ -77,32 +93,50 @@ export class CantonPaymentAdapter extends PaymentAdapter {
     const signatureB64 = signature.toString("base64");
 
     // Step 3: Verify and get JWT
-    const verifyRes = await fetch(`${serverUrl}/auth/verify`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        partyId: this.#partyId,
-        challenge,
-        signature: signatureB64,
-      }),
-    });
-    if (!verifyRes.ok) {
-      throw new Error(
-        `Verify failed: ${verifyRes.status} ${await verifyRes.text()}`
-      );
+    let verifyRes;
+    try {
+      verifyRes = await fetch(`${serverUrl}/auth/verify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          partyId: this.#partyId,
+          challenge,
+          signature: signatureB64,
+        }),
+      });
+    } catch (err) {
+      const code = err.cause?.code || err.code || "FETCH_ERROR";
+      console.log(`[EVENT] ${iso()} auth_error phase=verify code=${code} error=${JSON.stringify(err.message)}`);
+      throw new Error(`AUTH_FAILED (network ${code}): ${err.message}`);
     }
-    const { token } = await verifyRes.json();
+
+    if (!verifyRes.ok) {
+      const body = await verifyRes.text();
+      console.log(`[EVENT] ${iso()} auth_error phase=verify status=${verifyRes.status} body=${JSON.stringify(body.slice(0, 500))}`);
+      throw new Error(`AUTH_FAILED (verify HTTP ${verifyRes.status}): ${body}`);
+    }
+    const verifyData = await verifyRes.json();
+    const token = verifyData?.token;
+    if (!token) {
+      console.log(`[EVENT] ${iso()} auth_error phase=verify error="No token in response: ${JSON.stringify(verifyData).slice(0, 200)}"`);
+      throw new Error(`AUTH_FAILED (no token in response)`);
+    }
     this.#token = token;
     this.#tokenExpiresAt = Date.now() + 55 * 60_000; // 55 min (JWT is 1hr)
 
+    console.log(`[EVENT] ${iso()} auth_ok`);
     return { token, partyId: this.#partyId, fingerprint: this.#fingerprint };
   }
 
   async getBalance(billingPortalUrl) {
-    const res = await fetch(
-      `${billingPortalUrl}/api/balance?party=${encodeURIComponent(this.#partyId)}`
-    );
-    if (!res.ok) return { balance: 0, totalCharged: 0, totalCredited: 0 };
-    return res.json();
+    try {
+      const res = await fetch(
+        `${billingPortalUrl}/api/balance?party=${encodeURIComponent(this.#partyId)}`
+      );
+      if (!res.ok) return { balance: 0, totalCharged: 0, totalCredited: 0 };
+      return await res.json();
+    } catch {
+      return { balance: 0, totalCharged: 0, totalCredited: 0 };
+    }
   }
 }

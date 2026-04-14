@@ -5,19 +5,38 @@
  * Feeds tasks to the testing agent sequentially or in parallel.
  * Supports continuous loop mode for 24/7 liveliness testing.
  *
+ * Emits structured logs:
+ *   [EVENT] ... task_start/task_end/task_error/auth_*
+ *   [STATUS] ... periodic rollup (default every 60s)
+ *   [WARN] ... server delegations or soft issues
+ *   [CRITICAL] ... all-errors outage detected
+ *
  * Usage:
- *   node runner.js --key ~/.canton/my-key.json --server https://mcp-dev1.01.chainsafe.dev
- *   node runner.js --key ~/.canton/my-key.json --loop --loop-interval 60
- *   node runner.js --key ~/.canton/my-key.json --parallel 3
+ *   node runner.js --key ~/.canton/my-key.json
+ *   node runner.js --key ... --loop --loop-interval 60 --status-interval 60
  */
 
 import { readFileSync } from "fs";
 import { resolve } from "path";
 import { Agent } from "./agent.js";
+import { StatsAggregator } from "./stats.js";
 
 const DEFAULT_SERVER = "https://mcp-dev1.01.chainsafe.dev";
 const DEFAULT_INTERVAL = 5000;
 const DEFAULT_LOOP_INTERVAL = 60;
+const DEFAULT_STATUS_INTERVAL = 60;
+
+const iso = () => new Date().toISOString();
+
+function logInfo(msg) {
+  console.log(`[INFO] ${iso()} ${msg}`);
+}
+function logWarn(msg) {
+  console.log(`[WARN] ${iso()} ${msg}`);
+}
+function logCritical(msg) {
+  console.log(`[CRITICAL] ${iso()} ${msg}`);
+}
 
 function parseArgs() {
   const args = process.argv.slice(2);
@@ -28,8 +47,10 @@ function parseArgs() {
     interval: DEFAULT_INTERVAL,
     loop: false,
     loopInterval: DEFAULT_LOOP_INTERVAL,
+    statusInterval: DEFAULT_STATUS_INTERVAL,
     tasks: null,
     billingPortal: null,
+    verbose: false,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -41,22 +62,28 @@ function parseArgs() {
         opts.server = args[++i];
         break;
       case "--parallel":
-        opts.parallel = parseInt(args[++i], 10);
+        opts.parallel = parseInt(args[++i], 10) || 1;
         break;
       case "--interval":
-        opts.interval = parseInt(args[++i], 10);
+        opts.interval = parseInt(args[++i], 10) || DEFAULT_INTERVAL;
         break;
       case "--loop":
         opts.loop = true;
         break;
       case "--loop-interval":
-        opts.loopInterval = parseInt(args[++i], 10);
+        opts.loopInterval = parseInt(args[++i], 10) || DEFAULT_LOOP_INTERVAL;
+        break;
+      case "--status-interval":
+        opts.statusInterval = parseInt(args[++i], 10) ?? DEFAULT_STATUS_INTERVAL;
         break;
       case "--tasks":
         opts.tasks = args[++i];
         break;
       case "--billing-portal":
         opts.billingPortal = args[++i];
+        break;
+      case "--verbose":
+        opts.verbose = true;
         break;
       case "--help":
         console.log(`
@@ -71,9 +98,17 @@ Options:
   --interval <ms>         Delay between tasks in ms (default: ${DEFAULT_INTERVAL})
   --loop                  Run continuously
   --loop-interval <s>     Seconds between loop iterations (default: ${DEFAULT_LOOP_INTERVAL})
+  --status-interval <s>   Seconds between [STATUS] logs in loop mode (default: ${DEFAULT_STATUS_INTERVAL}, 0 to disable)
   --tasks <path>          Custom tasks JSON file (default: ./tasks.json)
   --billing-portal <url>  Billing portal URL (for balance checks)
+  --verbose               Print per-iteration summary tables (in loop mode)
   --help                  Show this help
+
+Log levels:
+  [EVENT]     per-task events (task_start, task_end, task_error, auth_*)
+  [STATUS]    periodic rollup (cumulative + hour + minute stats)
+  [WARN]      server delegations, soft issues
+  [CRITICAL]  outage detected (3+ consecutive all-error iterations)
 `);
         process.exit(0);
     }
@@ -123,7 +158,7 @@ function printSummary(results) {
   console.log("");
 }
 
-async function runOnce(agent, tasks, opts) {
+async function runOnce(agent, tasks, opts, stats = null) {
   const results = [];
 
   if (opts.parallel > 1) {
@@ -134,13 +169,7 @@ async function runOnce(agent, tasks, opts) {
         batch.map((task) => agent.executeTask(task))
       );
       results.push(...batchResults);
-
-      for (const r of batchResults) {
-        const icon = r.error ? "X" : r.pass ? "+" : "-";
-        console.log(
-          `  [${icon}] ${r.taskId}: ${r.action} (${r.confidence.toFixed(2)}) ${r.durationMs}ms`
-        );
-      }
+      if (stats) stats.addTaskResults(batchResults);
 
       if (i + opts.parallel < tasks.length) {
         await sleep(opts.interval);
@@ -151,11 +180,7 @@ async function runOnce(agent, tasks, opts) {
     for (const [i, task] of tasks.entries()) {
       const result = await agent.executeTask(task);
       results.push(result);
-
-      const icon = result.error ? "X" : result.pass ? "+" : "-";
-      console.log(
-        `  [${icon}] ${result.taskId}: ${result.action} (${result.confidence.toFixed(2)}) ${result.durationMs}ms`
-      );
+      if (stats) stats.addTaskResults([result]);
 
       if (i < tasks.length - 1) {
         await sleep(opts.interval);
@@ -174,58 +199,108 @@ async function main() {
   const opts = parseArgs();
   const tasks = loadTasks(opts.tasks);
 
-  console.log("=== Autobots Testing Agent ===");
-  console.log(`Server:   ${opts.server}`);
-  console.log(`Tasks:    ${tasks.length}`);
-  console.log(`Parallel: ${opts.parallel}`);
-  console.log(`Loop:     ${opts.loop ? `yes (every ${opts.loopInterval}s)` : "no"}`);
-  console.log("");
+  logInfo(`Autobots starting — server=${opts.server} tasks=${tasks.length} parallel=${opts.parallel} loop=${opts.loop}`);
 
-  // Authenticate
+  // Authenticate — hard exit on failure with full error
   const agent = new Agent(opts.server);
-  console.log("Authenticating...");
-  const auth = await agent.authenticate(opts.key);
-  console.log(`Authenticated: ${auth.partyId.slice(0, 40)}...`);
+  try {
+    const auth = await agent.authenticate(opts.key);
+    logInfo(`Authenticated as ${auth.partyId.slice(0, 50)}...`);
+  } catch (err) {
+    logCritical(`AUTH FAILED — cannot continue: ${err.message}`);
+    if (err.stack) console.error(err.stack);
+    process.exit(1);
+  }
 
   if (opts.billingPortal) {
-    const balance = await agent.getBalance(opts.billingPortal);
-    console.log(`Balance: ${balance.balance} CC (charged: ${balance.totalCharged}, credited: ${balance.totalCredited})`);
+    try {
+      const balance = await agent.getBalance(opts.billingPortal);
+      logInfo(`Balance: ${balance.balance} CC (charged: ${balance.totalCharged}, credited: ${balance.totalCredited})`);
+    } catch (err) {
+      logWarn(`Balance check failed: ${err.message}`);
+    }
   }
-  console.log("");
+
+  // Crash-safe: log uncaught exceptions before dying
+  process.on("uncaughtException", (err) => {
+    logCritical(`Uncaught exception: ${err.message}`);
+    console.error(err.stack);
+    process.exit(1);
+  });
+  process.on("unhandledRejection", (reason) => {
+    logCritical(`Unhandled rejection: ${reason}`);
+    if (reason?.stack) console.error(reason.stack);
+  });
 
   if (opts.loop) {
+    const stats = new StatsAggregator();
     let iteration = 0;
-    process.on("SIGINT", () => {
-      console.log("\nShutdown requested. Exiting...");
+
+    // Periodic status logger
+    let statusTimer = null;
+    if (opts.statusInterval > 0) {
+      statusTimer = setInterval(() => {
+        console.log(stats.formatStatus());
+      }, opts.statusInterval * 1000);
+    }
+
+    // Graceful shutdown
+    const shutdown = () => {
+      logInfo("Shutdown requested — printing final status...");
+      if (statusTimer) clearInterval(statusTimer);
+      console.log(stats.formatStatus());
+      logInfo(`Final: ${JSON.stringify(stats.snapshot().cumulative)}`);
       process.exit(0);
-    });
+    };
+    process.on("SIGINT", shutdown);
+    process.on("SIGTERM", shutdown);
 
     while (true) {
-      iteration++;
-      console.log(
-        `--- Iteration #${iteration} (${new Date().toISOString()}) ---`
-      );
-      const results = await runOnce(agent, tasks, opts);
-      printSummary(results);
+      try {
+        iteration++;
+        logInfo(`Iteration #${iteration} starting`);
 
-      if (opts.billingPortal) {
-        const balance = await agent.getBalance(opts.billingPortal);
-        console.log(`Balance after iteration: ${balance.balance} CC`);
+        let results = [];
+        try {
+          results = await runOnce(agent, tasks, opts, stats);
+        } catch (err) {
+          logCritical(`Iteration #${iteration} failed: ${err.message}`);
+          if (err.stack) console.error(err.stack);
+        }
+
+        stats.endIteration(results, iteration);
+
+        if (opts.verbose) {
+          printSummary(results);
+        }
+
+        // Outage detection
+        if (stats.consecutiveAllErrorIterations >= 3) {
+          logCritical(`${stats.consecutiveAllErrorIterations} consecutive iterations with 100% error rate — possible server outage`);
+        }
+        if (stats.consecutiveEmptyIterations >= 3) {
+          logCritical(`${stats.consecutiveEmptyIterations} consecutive empty iterations — tasks not running`);
+        }
+
+        logInfo(`Iteration #${iteration} complete — sleeping ${opts.loopInterval}s`);
+        await sleep(opts.loopInterval * 1000);
+      } catch (err) {
+        logCritical(`Loop iteration error: ${err.message}`);
+        await sleep(5000); // Brief pause before retrying
       }
-
-      console.log(
-        `Sleeping ${opts.loopInterval}s until next iteration...\n`
-      );
-      await sleep(opts.loopInterval * 1000);
     }
   } else {
-    console.log("Running tasks...");
+    logInfo("Running tasks (single pass)...");
     const results = await runOnce(agent, tasks, opts);
     printSummary(results);
 
     if (opts.billingPortal) {
-      const balance = await agent.getBalance(opts.billingPortal);
-      console.log(`Final balance: ${balance.balance} CC`);
+      try {
+        const balance = await agent.getBalance(opts.billingPortal);
+        logInfo(`Final balance: ${balance.balance} CC`);
+      } catch (err) {
+        logWarn(`Balance check failed: ${err.message}`);
+      }
     }
 
     const allPassed = results.every((r) => r.pass);
@@ -234,6 +309,7 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error("Fatal:", err.message);
+  logCritical(`Fatal error in main: ${err.message}`);
+  if (err.stack) console.error(err.stack);
   process.exit(1);
 });
