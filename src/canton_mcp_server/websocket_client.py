@@ -113,12 +113,16 @@ class FacilitatorWebSocketClient:
                 logger.debug(f"💰 Balance updated for {party}: ${balance:.2f}")
         
         elif msg_type == "access-denied":
-            # Access denied due to threshold
+            # Access denied due to threshold.
+            # Demoted to DEBUG: the x402 facilitator's access-denied broadcast uses
+            # the legacy "balance = amountDue - amountPaid" model, which does NOT
+            # see on-chain Canton CreditReceipts. Real access control runs via
+            # ChargeReceipt/CreditReceipt balance check in server.py, not here.
             balance = data.get("balance", 0)
             reason = data.get("reason", "Unknown")
             if party:
                 self.balance_cache[party] = balance
-                logger.warning(f"🚫 Access denied for {party}: {reason} (balance: ${balance:.2f})")
+                logger.debug(f"🚫 Facilitator reported access-denied for {party}: {reason} (balance: ${balance:.2f})")
 
     async def _reconnect(self):
         """Reconnect to WebSocket server with exponential backoff"""

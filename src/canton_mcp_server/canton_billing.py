@@ -32,7 +32,7 @@ USE_CANTON_34_FLOW = get_env_bool("USE_CANTON_34_FLOW", False)
 BILLING_PORTAL_URL = get_env("BILLING_PORTAL_URL", "http://localhost:3050")
 
 # Environment configuration
-CANTON_LEDGER_URL = os.getenv("CANTON_LEDGER_URL", "http://localhost:3975")
+CANTON_LEDGER_URL = get_env("CANTON_LEDGER_URL", "http://localhost:3975")
 CANTON_OAUTH_TOKEN_URL = os.getenv(
     "CANTON_OAUTH_TOKEN_URL",
     "http://localhost:8082/realms/AppProvider/protocol/openid-connect/token"

@@ -420,8 +420,19 @@ class DAMLSemanticSearch:
             ]
 
         # Filter results below minimum similarity threshold
-        min_score = float(get_env("MIN_SIMILARITY_THRESHOLD", "0.3"))
+        min_score = float(get_env("MIN_SIMILARITY_THRESHOLD", "0.15"))
+        pre_filter_count = len(relevant_resources)
         relevant_resources = [r for r in relevant_resources if r.get("similarity_score", 0) >= min_score]
+        top_score = (1.0 - result_distances[0]) if result_distances else 0.0
+        logger.info(
+            f"📊 Similarity filter: {pre_filter_count} → {len(relevant_resources)} "
+            f"(threshold={min_score:.2f}, top={top_score:.3f})"
+        )
+        if pre_filter_count > 0 and len(relevant_resources) == 0:
+            logger.warning(
+                f"⚠️ All {pre_filter_count} results filtered out — top similarity {top_score:.3f} "
+                f"< threshold {min_score:.2f}. Consider lowering MIN_SIMILARITY_THRESHOLD."
+            )
 
         # Re-read file content from disk so LLM receives actual code, not empty strings
         try:
