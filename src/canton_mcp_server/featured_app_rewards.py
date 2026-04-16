@@ -13,20 +13,18 @@ Flow:
 Non-blocking: marker creation never fails a tool call.
 """
 
-import asyncio
 import logging
 import os
 from typing import Optional
 
-logger = logging.getLogger(__name__)
-
-# Reuse the ledger request infrastructure from canton_billing
 from canton_mcp_server.canton_billing import (
     CANTON_PROVIDER_PARTY,
     CANTON_USER_ID,
     _make_ledger_request,
     get_ledger_offset,
 )
+
+logger = logging.getLogger(__name__)
 
 # Feature gate
 FEATURED_APP_REWARDS_ENABLED = (
