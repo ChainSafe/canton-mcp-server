@@ -65,13 +65,13 @@ async def init_featured_app_right() -> bool:
             },
         )
 
-        contracts = data if isinstance(data, list) else data.get("active_contracts", data.get("result", []))
+        contracts = data if isinstance(data, list) else data.get("activeContracts", data.get("result", []))
 
         for c in contracts:
             # Canton JSON API v2 wraps contracts in contractEntry.JsActiveContract.createdEvent
             ce = c.get("contractEntry", {})
             ac = ce.get("JsActiveContract", {})
-            event = ac.get("createdEvent", {}) or c.get("created_event", c)
+            event = ac.get("createdEvent", {}) or c.get("createdEvent", c)
             template_id = event.get("templateId", "")
             if "FeaturedAppRight" in template_id:
                 contract_id = event.get("contractId", "")
