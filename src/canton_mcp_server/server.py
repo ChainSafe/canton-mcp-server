@@ -103,6 +103,20 @@ logger = logging.getLogger(__name__)
 # Reduce uvicorn access log noise (only show warnings/errors)
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
+
+# Filter out successful /health and /ready probe access logs. K8s polls these
+# from multiple pods several times per second, which drowns real request logs
+# in Loki. We keep errors (non-2xx) visible by only filtering INFO records.
+class _ProbeLogFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.levelno >= logging.WARNING:
+            return True
+        msg = record.getMessage()
+        return not (" /health " in msg or " /ready " in msg)
+
+
+logging.getLogger("uvicorn.access").addFilter(_ProbeLogFilter())
+
 # Global instances
 payment_handler = PaymentHandler()
 
@@ -195,6 +209,21 @@ async def lifespan(app: FastAPI):
             logger.info(f"📡 DCAP semantic_discover broadcasting enabled (interval: {interval_sec}s)")
         else:
             logger.warning("⚠️ DCAP enabled but DCAP_SERVER_URL not configured - skipping semantic_discover")
+
+    # Initialize FeaturedAppRight contract lookup for reward marker emission
+    # Import lazily — this module imports canton_billing which pulls in httpx/orjson;
+    # at Docker build time the __init__.py → server.py import chain runs during the
+    # ChromaDB pre-index step where these aren't needed and may not resolve.
+    try:
+        from canton_mcp_server.featured_app_rewards import FEATURED_APP_REWARDS_ENABLED, init_featured_app_right
+        if FEATURED_APP_REWARDS_ENABLED and payment_handler.canton_enabled:
+            found = await init_featured_app_right()
+            if found:
+                logger.info("Featured app rewards enabled — activity markers will be emitted per tool call")
+            else:
+                logger.warning("Featured app rewards enabled but FeaturedAppRight not found — markers disabled")
+    except Exception as e:
+        logger.warning(f"FeaturedAppRight init failed (non-fatal): {e}")
 
     yield
 
@@ -541,6 +570,13 @@ After top-up, return to Cursor and your tools will work again.
                                 request_id=str(mcp_request.id),
                             )
                             logger.info(f"ChargeReceipt created (streaming): {charge_contract_id}")
+                            # Emit FeaturedAppActivityMarker for reward tracking
+                            try:
+                                from canton_mcp_server.featured_app_rewards import FEATURED_APP_REWARDS_ENABLED, create_activity_marker
+                                if FEATURED_APP_REWARDS_ENABLED:
+                                    await create_activity_marker(request_id=str(mcp_request.id))
+                            except ImportError:
+                                pass
                         except Exception as e:
                             logger.critical(f"BILLING INTEGRITY: Failed to create ChargeReceipt for {party_id}/{tool_name}/{price_cc}CC: {e}")
                     asyncio.create_task(create_charge())
@@ -603,6 +639,13 @@ After top-up, return to Cursor and your tools will work again.
                         request_id=str(mcp_request.id),
                     )
                     logger.info(f"ChargeReceipt created on-chain: {tool_name} - {price_cc} CC from {party_id} (contract: {charge_contract_id})")
+                    # Emit FeaturedAppActivityMarker for reward tracking (fire-and-forget)
+                    try:
+                        from canton_mcp_server.featured_app_rewards import FEATURED_APP_REWARDS_ENABLED, create_activity_marker
+                        if FEATURED_APP_REWARDS_ENABLED:
+                            asyncio.create_task(create_activity_marker(request_id=str(mcp_request.id)))
+                    except ImportError:
+                        pass
             except Exception as e:
                 logger.critical(f"BILLING INTEGRITY: Failed to create ChargeReceipt for {party_id}/{tool_name}/{price_cc}CC: {e}")
 

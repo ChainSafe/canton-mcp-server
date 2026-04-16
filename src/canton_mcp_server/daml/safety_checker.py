@@ -321,6 +321,19 @@ FILE {i}: {file.get('file_path', 'unknown')} (similarity: {file.get('similarity_
 
         # Step 3: Extract authorization model with confidence scoring
         auth_extraction = self.auth_validator.extract_auth_model(code, compilation_result)
+        if auth_extraction.model:
+            logger.info(
+                f"[AUTH] Extracted model: template={auth_extraction.model.template_name} "
+                f"method={auth_extraction.method} confidence={auth_extraction.confidence:.2f} "
+                f"signatories={auth_extraction.model.signatories} "
+                f"observers={auth_extraction.model.observers} "
+                f"controllers={dict(auth_extraction.model.controllers)}"
+            )
+        else:
+            logger.info(
+                f"[AUTH] Extraction returned no model (method={auth_extraction.method}, "
+                f"confidence={auth_extraction.confidence:.2f})"
+            )
         
         # Store extraction result for insights (will be added to SafetyCheckResult)
         extraction_insights = None
@@ -392,8 +405,9 @@ FILE {i}: {file.get('file_path', 'unknown')} (similarity: {file.get('similarity_
         auth_valid = True
         if auth_extraction.model:
             auth_valid = self.auth_validator.validate_authorization(auth_extraction.model)
+            logger.info(f"[AUTH] validate_authorization returned auth_valid={auth_valid}")
         else:
-            logger.warning("Could not extract authorization model")
+            logger.warning("[AUTH] Could not extract authorization model — treating as invalid")
             auth_valid = False
 
         # Step 6: Final safety determination

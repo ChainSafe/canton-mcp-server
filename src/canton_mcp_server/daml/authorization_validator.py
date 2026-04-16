@@ -563,8 +563,9 @@ If you see interesting patterns worth explaining, add a paragraph after the JSON
         # Rule 1: At least one signatory
         if not auth_model.signatories:
             logger.warning(
-                f"Authorization model invalid: {auth_model.template_name} "
-                "has no signatories"
+                f"[AUTH] Invalid auth model: template={auth_model.template_name} "
+                f"has no signatories (observers={auth_model.observers}, "
+                f"controllers={dict(auth_model.controllers)})"
             )
             return False
 

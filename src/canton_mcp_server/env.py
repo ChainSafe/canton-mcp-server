@@ -141,6 +141,9 @@ ENV_VALUES["BILLING_PORTAL_URL"] = os.getenv("BILLING_PORTAL_URL", "http://local
 # Canton payment defaults
 ENV_VALUES["CANTON_DEFAULT_PAYER_PARTY"] = os.getenv("CANTON_DEFAULT_PAYER_PARTY", "")
 
+# Featured App Rewards (FeaturedAppActivityMarker emission per CIP-0047)
+ENV_VALUES["FEATURED_APP_REWARDS_ENABLED"] = os.getenv("FEATURED_APP_REWARDS_ENABLED", "false")
+
 # Isolated environment flag (also read directly via os.environ at module level)
 ENV_VALUES["IS_ISOLATED_ENVIRONMENT"] = os.getenv("IS_ISOLATED_ENVIRONMENT", "false")
 
