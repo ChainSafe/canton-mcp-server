@@ -48,6 +48,8 @@ export class GrowthOrchestrator {
   #startedAt = 0;
   #bots = [];
   #stopped = false;
+  #tickPromise = null;
+  #poolExhaustedLogged = false;
 
   constructor({
     serverUrl,
@@ -125,12 +127,43 @@ export class GrowthOrchestrator {
       }
     }
 
-    await this.#tickLoop();
+    this.#tickPromise = this.#tickLoop();
+    await this.#tickPromise;
   }
 
-  stop() {
+  /**
+   * Signal all bots + the tick loop to exit and await their completion,
+   * bounded by `timeoutMs` so a wedged loop can't block shutdown forever.
+   */
+  async stop(timeoutMs = 25_000) {
     this.#stopped = true;
-    for (const bot of this.#bots) bot.stop();
+    // Snapshot the bot list before signalling so any concurrent mutation
+    // (e.g. release callbacks removing bots from #bots) doesn't alter the
+    // set we wait on.
+    const loops = this.#bots.map((b) => {
+      b.stop();
+      return b.loopPromise;
+    });
+    if (this.#tickPromise) loops.push(this.#tickPromise);
+    const pending = loops.filter(Boolean);
+    if (pending.length === 0) return;
+    let timerHandle;
+    const timer = new Promise((resolve) => {
+      timerHandle = setTimeout(() => resolve("timeout"), timeoutMs);
+    });
+    const settled = Promise.allSettled(pending).then((results) => {
+      for (const r of results) {
+        if (r.status === "rejected") {
+          logCritical(`Loop rejected during shutdown: ${r.reason?.message || r.reason}`);
+        }
+      }
+      return "clean";
+    });
+    const outcome = await Promise.race([settled, timer]);
+    clearTimeout(timerHandle);
+    if (outcome === "timeout") {
+      logWarn(`Orchestrator.stop(): ${pending.length} loop(s) still running after ${timeoutMs}ms; exiting anyway`);
+    }
   }
 
   async #spawnBot(keyPath, reused = false) {
@@ -184,8 +217,16 @@ export class GrowthOrchestrator {
             logWarn(
               `Party pool exhausted (${this.#pool.inUseCount}/${this.#pool.maxSize}); will retry next tick`
             );
+            if (!this.#poolExhaustedLogged) {
+              // Emit once per stretch; reset when a checkout next succeeds.
+              console.log(
+                `[EVENT] ${iso()} pool_exhausted inUse=${this.#pool.inUseCount} max=${this.#pool.maxSize}`
+              );
+              this.#poolExhaustedLogged = true;
+            }
             break;
           }
+          this.#poolExhaustedLogged = false;
           try {
             await this.#spawnBot(reservation.keyPath, reservation.reused);
           } catch {
