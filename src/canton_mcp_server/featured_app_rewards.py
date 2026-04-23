@@ -21,7 +21,7 @@ from canton_mcp_server.canton_billing import (
     CANTON_PROVIDER_PARTY,
     CANTON_USER_ID,
     _make_ledger_request,
-    get_ledger_offset,
+    _query_active_contracts_via_updates,
 )
 
 logger = logging.getLogger(__name__)
@@ -31,11 +31,16 @@ FEATURED_APP_REWARDS_ENABLED = (
     os.getenv("FEATURED_APP_REWARDS_ENABLED", "false").lower() == "true"
 )
 
-# Cached FeaturedAppRight contract
-_featured_app_right_cache: dict = {
-    "contract_id": None,
-    "template_id": None,
-}
+# The CreateActivityMarker choice is defined on the Splice API *interface*,
+# not on the concrete Splice.Amulet:FeaturedAppRight template.
+# Canton JSON API v2 requires the interface ID for exercising interface choices.
+FEATURED_APP_RIGHT_INTERFACE_ID = (
+    "7804375fe5e4c6d5afe067bd314c42fe0b7d005a1300019c73154dd939da4dda"
+    ":Splice.Api.FeaturedAppRightV1:FeaturedAppRight"
+)
+
+# Cached FeaturedAppRight contract ID; the template is always the interface ID.
+_featured_app_right_cache: dict = {"contract_id": None}
 
 
 async def init_featured_app_right() -> bool:
@@ -49,39 +54,21 @@ async def init_featured_app_right() -> bool:
         logger.warning("CANTON_PROVIDER_PARTY not set — cannot query FeaturedAppRight")
         return False
 
+    def extract(contract_id: str, _payload: dict, _created_at: str) -> Optional[str]:
+        return contract_id or None
+
     try:
-        offset = await get_ledger_offset()
-        data = await _make_ledger_request(
-            "POST",
-            "/v2/state/active-contracts",
-            {
-                "filter": {
-                    "filtersByParty": {
-                        CANTON_PROVIDER_PARTY: {"cumulative": []},
-                    },
-                },
-                "activeAtOffset": offset,
-                "verbose": False,
-            },
+        results = await _query_active_contracts_via_updates(
+            template_suffix="FeaturedAppRight",
+            party=CANTON_PROVIDER_PARTY,
+            extract=extract,
+            stop_when=lambda _cid: True,
         )
-
-        contracts = data if isinstance(data, list) else data.get("activeContracts", data.get("result", []))
-
-        for c in contracts:
-            # Canton JSON API v2 wraps contracts in contractEntry.JsActiveContract.createdEvent
-            ce = c.get("contractEntry", {})
-            ac = ce.get("JsActiveContract", {})
-            event = ac.get("createdEvent", {}) or c.get("createdEvent", c)
-            template_id = event.get("templateId", "")
-            if "FeaturedAppRight" in template_id:
-                contract_id = event.get("contractId", "")
-                _featured_app_right_cache["contract_id"] = contract_id
-                _featured_app_right_cache["template_id"] = template_id
-                logger.info(
-                    f"FeaturedAppRight contract found: {contract_id[:40]}... "
-                    f"(template: {template_id})"
-                )
-                return True
+        if results:
+            contract_id = results[0]
+            _featured_app_right_cache["contract_id"] = contract_id
+            logger.info(f"FeaturedAppRight contract found: {contract_id[:40]}...")
+            return True
 
         logger.warning(
             f"FeaturedAppRight not found for {CANTON_PROVIDER_PARTY}. "
@@ -109,9 +96,7 @@ async def create_activity_marker(request_id: str) -> Optional[str]:
         return None
 
     contract_id = _featured_app_right_cache.get("contract_id")
-    template_id = _featured_app_right_cache.get("template_id")
-
-    if not contract_id or not template_id:
+    if not contract_id:
         return None
 
     try:
@@ -127,7 +112,7 @@ async def create_activity_marker(request_id: str) -> Optional[str]:
                     "commands": [
                         {
                             "ExerciseCommand": {
-                                "templateId": template_id,
+                                "templateId": FEATURED_APP_RIGHT_INTERFACE_ID,
                                 "contractId": contract_id,
                                 "choice": "FeaturedAppRight_CreateActivityMarker",
                                 "choiceArgument": {

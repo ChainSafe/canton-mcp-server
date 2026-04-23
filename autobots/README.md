@@ -146,6 +146,37 @@ sudo journalctl -fu autobots | grep -E "STATUS|CRITICAL"
 {container="autobots"} |~ "CRITICAL|WARN"         # anything needing attention
 ```
 
+## Growth Mode — simulate organic user growth
+
+Instead of a single pre-provisioned `--key`, growth mode mints new Canton parties on-the-fly via the billing portal and runs each one as an independent bot on its own task loop. Both the number of bots and the per-bot task rate ramp up over time following a sqrt curve, producing a decelerating-growth trend suitable for e2e soak testing.
+
+```bash
+# Short demo run — 5 users over 6 minutes, 0.2 → 2 tasks/min per bot
+node runner.js --growth \
+  --server https://mcp-dev1.01.chainsafe.dev \
+  --billing-portal https://billing-dev1.01.chainsafe.dev \
+  --max-users 5 --ramp-hours 0.1 \
+  --min-rate-per-min 0.2 --max-rate-per-min 2
+```
+
+Generated keyfiles are saved to `./keys/<name-prefix>-<N>.json` and reused on restart, so killing and re-starting the process does not re-mint parties or double the fleet.
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `--growth` | off | Enable growth mode |
+| `--billing-portal` | (required) | Portal URL for party registration |
+| `--max-users` | 20 | Ramp target (concurrent bots at plateau) |
+| `--ramp-hours` | 24 | Hours from 1 bot to `--max-users` bots |
+| `--min-rate-per-min` | 0.2 | Per-bot task rate at ramp start |
+| `--max-rate-per-min` | 2 | Per-bot task rate at ramp end |
+| `--keys-dir` | `./keys` | Where generated keyfiles are persisted |
+| `--name-prefix` | `autobot` | Prefix for minted party names |
+| `--growth-tick-seconds` | 30 | Orchestrator tick cadence |
+
+Growth-mode `[STATUS]` lines include a `bots=N` segment alongside the existing task stats. Each bot spawn emits `[EVENT] ... party_provisioned` (new mint) or reuses an existing keyfile silently.
+
+> Note: newly minted parties on devnet are not auto-funded (faucet/tap is localnet-only). If your MCP server charges strict CC balance, pre-fund the keys in `./keys/` manually or run against localnet.
+
 ## Custom Tasks
 
 Create a JSON file with your own tasks:

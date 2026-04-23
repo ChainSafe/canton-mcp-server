@@ -18,7 +18,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Set
+from typing import Callable, Optional, Set, TypeVar
 
 import httpx
 import orjson
@@ -549,6 +549,17 @@ async def ensure_party_registered(party_id: str) -> bool:
         if "unknownInformees" in error_str or "UNKNOWN_INFORMEES" in error_str:
             logger.warning(f"Party truly unknown to ledger: {party_id}")
             return False
+        # 200-element cap: the ledger responded with results-too-large, which
+        # proves it knows the party. Treat as a successful probe.
+        if (
+            "MAXIMUM_LIST_ELEMENTS_NUMBER_REACHED" in error_str
+            or "413" in error_str
+        ):
+            _add_registered_party(party_id)
+            logger.warning(
+                f"Ledger probe hit 200-element cap for {party_id} — treating as registered"
+            )
+            return True
         # Other ledger errors (network, auth) — don't conclude party is unregistered
         logger.warning(f"Ledger probe inconclusive for {party_id}: {e}")
         return False
@@ -709,6 +720,127 @@ async def get_ledger_offset() -> int:
     """Get current ledger offset for queries."""
     data = await _make_ledger_request("GET", "/v2/state/ledger-end")
     return data.get("offset", 0)
+
+
+_T = TypeVar("_T")
+
+
+async def _query_active_contracts_via_updates(
+    template_suffix: str,
+    party: str,
+    extract: Callable[[str, dict, str], Optional[_T]],
+    stop_when: Optional[Callable[[_T], bool]] = None,
+    page_size: int = 100,
+    end_offset: Optional[int] = None,
+) -> list[_T]:
+    """
+    Paginate the Canton JSON API /v2/updates endpoint to collect currently-active
+    contracts of a given template belonging to `party`.
+
+    Why this exists: /v2/state/active-contracts has a hard 200-element cap
+    (JSON_API_MAXIMUM_LIST_ELEMENTS_NUMBER_REACHED on the participant). /v2/updates
+    supports a `limit` query param and we page forward via `beginExclusive` through
+    each transaction's `offset`. Creates are tracked in a dict; Archives remove
+    them. Port of queryActiveReceiptsViaUpdates in canton-billing-portal
+    (lib/canton-json-api.ts:634).
+
+    `template_suffix` is matched as a substring of the full templateId (e.g.
+    ":MCP.Billing:CreditReceipt"). `extract` receives (contractId, payload,
+    createdAt) and returns a record or None (None means "skip"). When
+    `stop_when` is provided, the walk short-circuits as soon as it returns True
+    for any collected record — useful for unique-key lookups.
+    """
+    if end_offset is None:
+        raw_end = await get_ledger_offset()
+        try:
+            end_offset = int(raw_end)
+        except (TypeError, ValueError):
+            end_offset = 0
+    active: dict[str, _T] = {}
+    begin = 0
+
+    while begin < end_offset:
+        page = await _make_ledger_request(
+            "POST",
+            f"/v2/updates?limit={page_size}",
+            {
+                "beginExclusive": begin,
+                "endInclusive": end_offset,
+                "filter": {
+                    "filtersByParty": {
+                        party: {"cumulative": []},
+                    },
+                },
+                "verbose": False,
+            },
+        )
+
+        items = page if isinstance(page, list) else page.get("updates", [])
+        if not items:
+            break
+
+        max_offset_this_page = begin
+        for item in items:
+            update = item.get("update", {}) if isinstance(item, dict) else {}
+            tx_wrapper = update.get("Transaction") or {}
+            tx = tx_wrapper.get("value") if isinstance(tx_wrapper, dict) else None
+            if not tx:
+                tx = update.get("transaction")
+            if not tx:
+                continue
+
+            raw_offset = tx.get("offset")
+            if isinstance(raw_offset, str):
+                try:
+                    tx_offset = int(raw_offset)
+                except ValueError:
+                    tx_offset = max_offset_this_page
+            elif isinstance(raw_offset, (int, float)):
+                tx_offset = int(raw_offset)
+            else:
+                tx_offset = max_offset_this_page
+            if tx_offset > max_offset_this_page:
+                max_offset_this_page = tx_offset
+
+            for ev in tx.get("events", []) or []:
+                created = ev.get("CreatedEvent") or ev.get("createdEvent")
+                if created:
+                    template_id = created.get("templateId", "") or ""
+                    if template_suffix not in template_id:
+                        continue
+                    payload = (
+                        created.get("createArgument")
+                        or created.get("createArguments")
+                        or {}
+                    )
+                    contract_id = created.get("contractId", "") or ""
+                    payload_ts = payload.get("timestamp") if isinstance(payload, dict) else None
+                    payload_created = payload.get("createdAt") if isinstance(payload, dict) else None
+                    created_at = (
+                        payload_ts
+                        or payload_created
+                        or created.get("createdAt")
+                        or tx.get("effectiveAt")
+                        or ""
+                    )
+                    record = extract(contract_id, payload, created_at)
+                    if record is not None:
+                        active[contract_id] = record
+                        if stop_when is not None and stop_when(record):
+                            return list(active.values())
+                    continue
+                archived = ev.get("ArchivedEvent") or ev.get("archivedEvent")
+                if archived:
+                    template_id = archived.get("templateId", "") or ""
+                    if template_suffix in template_id:
+                        active.pop(archived.get("contractId", ""), None)
+
+        # Stale-offset guard — if the server doesn't advance, bail out.
+        if max_offset_this_page <= begin:
+            break
+        begin = max_offset_this_page
+
+    return list(active.values())
 
 
 async def get_or_create_charge_manager() -> str:
@@ -963,82 +1095,44 @@ async def create_charge_receipt(
         raise CantonBillingError(f"ChargeReceipt creation error: {e}")
 
 
-async def query_charges(user_party: str) -> list[ChargeRecord]:
+async def query_charges(
+    user_party: str, end_offset: Optional[int] = None
+) -> list[ChargeRecord]:
     """
     Query all ChargeReceipt contracts for a user.
 
-    Args:
-        user_party: Canton party ID of the user
-
-    Returns:
-        List of ChargeRecord objects
+    Paginates via /v2/updates to sidestep the 200-element cap on
+    /v2/state/active-contracts (see _query_active_contracts_via_updates).
+    `end_offset` lets callers share a single ledger-end snapshot across
+    multiple parallel queries (e.g. get_balance).
     """
     if not CANTON_PROVIDER_PARTY:
         raise CantonBillingError("CANTON_PROVIDER_PARTY not configured")
 
-    template_id = f"{BILLING_PACKAGE_ID}:MCP.Billing:ChargeReceipt"
-
     logger.info(f"Querying charges for user: {user_party}")
 
-    try:
-        # Get current ledger offset
-        offset = await get_ledger_offset()
-
-        data = await _make_ledger_request(
-            "POST",
-            "/v2/state/active-contracts",
-            {
-                "filter": {
-                    "filtersByParty": {
-                        CANTON_PROVIDER_PARTY: {
-                            "filters": [{
-                                "templateFilter": {
-                                    "templateId": template_id
-                                }
-                            }]
-                        }
-                    }
-                },
-                "activeAtOffset": offset
-            }
+    def extract(contract_id: str, payload: dict, created_at: str) -> Optional[ChargeRecord]:
+        if payload.get("user") != user_party:
+            return None
+        return ChargeRecord(
+            contract_id=contract_id,
+            user_party=payload.get("user", ""),
+            tool=payload.get("tool", ""),
+            amount=float(payload.get("amount", "0")),
+            request_id=payload.get("requestId", ""),
+            created_at=created_at,
+            description=payload.get("description"),
         )
 
-        # Handle response format: array of contract entries
-        contracts = data if isinstance(data, list) else data.get("activeContracts", [])
-        charges = []
-
-        for contract in contracts:
-            # Canton 3.4 format: contractEntry.JsActiveContract.createdEvent
-            entry = contract.get("contractEntry", {})
-            active_contract = entry.get("JsActiveContract") or entry.get("activeContract", {})
-            created_event = active_contract.get("createdEvent", {})
-
-            # Note: Canton 3.4 uses "createArgument" (singular), not "createArguments"
-            payload = created_event.get("createArgument") or created_event.get("createArguments", {})
-            contract_id = created_event.get("contractId", "")
-            template_id = created_event.get("templateId", "")
-
-            # Skip non-ChargeReceipt contracts
-            if not template_id.endswith(":ChargeReceipt"):
-                continue
-
-            # Filter by user party
-            if payload.get("user") != user_party:
-                continue
-
-            charges.append(ChargeRecord(
-                contract_id=contract_id,
-                user_party=payload.get("user", ""),
-                tool=payload.get("tool", ""),
-                amount=float(payload.get("amount", "0")),
-                request_id=payload.get("requestId", ""),
-                created_at=created_event.get("createdAt", ""),
-                description=payload.get("description"),
-            ))
-
+    try:
+        charges = await _query_active_contracts_via_updates(
+            template_suffix=":MCP.Billing:ChargeReceipt",
+            party=CANTON_PROVIDER_PARTY,
+            extract=extract,
+            end_offset=end_offset,
+        )
         logger.info(f"Found {len(charges)} charges for {user_party}")
         return charges
-
     except LedgerError:
         raise
     except Exception as e:
@@ -1188,81 +1282,43 @@ async def create_credit_receipt(
         raise CantonBillingError(f"CreditReceipt creation error: {e}")
 
 
-async def query_credits(user_party: str) -> list[CreditRecord]:
+async def query_credits(
+    user_party: str, end_offset: Optional[int] = None
+) -> list[CreditRecord]:
     """
     Query all CreditReceipt contracts for a user.
 
-    Args:
-        user_party: Canton party ID of the user
-
-    Returns:
-        List of CreditRecord objects
+    Paginates via /v2/updates to sidestep the 200-element cap on
+    /v2/state/active-contracts (see _query_active_contracts_via_updates).
+    `end_offset` lets callers share a single ledger-end snapshot across
+    multiple parallel queries (e.g. get_balance).
     """
     if not CANTON_PROVIDER_PARTY:
         raise CantonBillingError("CANTON_PROVIDER_PARTY not configured")
 
-    template_id = f"{BILLING_PACKAGE_ID}:MCP.Billing:CreditReceipt"
-
     logger.info(f"Querying credits for user: {user_party}")
 
-    try:
-        # Get current ledger offset
-        offset = await get_ledger_offset()
-
-        data = await _make_ledger_request(
-            "POST",
-            "/v2/state/active-contracts",
-            {
-                "filter": {
-                    "filtersByParty": {
-                        CANTON_PROVIDER_PARTY: {
-                            "filters": [{
-                                "templateFilter": {
-                                    "templateId": template_id
-                                }
-                            }]
-                        }
-                    }
-                },
-                "activeAtOffset": offset
-            }
+    def extract(contract_id: str, payload: dict, created_at: str) -> Optional[CreditRecord]:
+        if payload.get("user") != user_party:
+            return None
+        return CreditRecord(
+            contract_id=contract_id,
+            user_party=payload.get("user", ""),
+            amount=float(payload.get("amount", "0")),
+            transfer_id=payload.get("transferId", ""),
+            created_at=created_at,
+            description=payload.get("description"),
         )
 
-        # Handle response format: array of contract entries
-        contracts = data if isinstance(data, list) else data.get("activeContracts", [])
-        credits = []
-
-        for contract in contracts:
-            # Canton 3.4 format: contractEntry.JsActiveContract.createdEvent
-            entry = contract.get("contractEntry", {})
-            active_contract = entry.get("JsActiveContract") or entry.get("activeContract", {})
-            created_event = active_contract.get("createdEvent", {})
-
-            # Note: Canton 3.4 uses "createArgument" (singular), not "createArguments"
-            payload = created_event.get("createArgument") or created_event.get("createArguments", {})
-            contract_id = created_event.get("contractId", "")
-            template_id = created_event.get("templateId", "")
-
-            # Skip non-CreditReceipt contracts
-            if not template_id.endswith(":CreditReceipt"):
-                continue
-
-            # Filter by user party
-            if payload.get("user") != user_party:
-                continue
-
-            credits.append(CreditRecord(
-                contract_id=contract_id,
-                user_party=payload.get("user", ""),
-                amount=float(payload.get("amount", "0")),
-                transfer_id=payload.get("transferId", ""),
-                created_at=created_event.get("createdAt", ""),
-                description=payload.get("description"),
-            ))
-
+    try:
+        credits = await _query_active_contracts_via_updates(
+            template_suffix=":MCP.Billing:CreditReceipt",
+            party=CANTON_PROVIDER_PARTY,
+            extract=extract,
+            end_offset=end_offset,
+        )
         logger.info(f"Found {len(credits)} credits for {user_party}")
         return credits
-
     except LedgerError:
         raise
     except Exception as e:
@@ -1284,10 +1340,16 @@ async def get_balance(user_party: str) -> BalanceResult:
     Returns:
         BalanceResult with total charged, credited, and balance
     """
-    # Query both charges and credits in parallel
+    # Share a single ledger-end snapshot so both parallel walks see the same
+    # slice of history and we pay the /v2/state/ledger-end round-trip once.
+    raw_end = await get_ledger_offset()
+    try:
+        end_offset = int(raw_end)
+    except (TypeError, ValueError):
+        end_offset = 0
     charges, credits = await asyncio.gather(
-        query_charges(user_party),
-        query_credits(user_party),
+        query_charges(user_party, end_offset=end_offset),
+        query_credits(user_party, end_offset=end_offset),
     )
 
     total_charged = sum(c.amount for c in charges)
@@ -1307,78 +1369,44 @@ async def get_balance(user_party: str) -> BalanceResult:
 
 async def query_credit_by_transfer_id(transfer_id: str) -> Optional[CreditRecord]:
     """
-    Query for an existing CreditReceipt by transfer_id.
+    Query for an existing CreditReceipt by transfer_id (duplicate prevention).
 
-    Used to prevent duplicate credits for the same transfer.
-
-    Args:
-        transfer_id: The transfer ID to search for
-
-    Returns:
-        CreditRecord if found, None otherwise
+    Paginates via /v2/updates and short-circuits on the first match so the
+    common case (no duplicate) still walks the ledger but the hit case
+    returns immediately without fetching further pages.
     """
     if not CANTON_PROVIDER_PARTY:
         raise CantonBillingError("CANTON_PROVIDER_PARTY not configured")
 
-    template_id = f"{BILLING_PACKAGE_ID}:MCP.Billing:CreditReceipt"
-
     logger.info(f"Checking for existing credit with transferId: {transfer_id}")
 
-    try:
-        # Get current ledger offset
-        offset = await get_ledger_offset()
-
-        data = await _make_ledger_request(
-            "POST",
-            "/v2/state/active-contracts",
-            {
-                "filter": {
-                    "filtersByParty": {
-                        CANTON_PROVIDER_PARTY: {
-                            "filters": [{
-                                "templateFilter": {
-                                    "templateId": template_id
-                                }
-                            }]
-                        }
-                    }
-                },
-                "activeAtOffset": offset
-            }
+    def extract(contract_id: str, payload: dict, created_at: str) -> Optional[CreditRecord]:
+        if payload.get("transferId") != transfer_id:
+            return None
+        return CreditRecord(
+            contract_id=contract_id,
+            user_party=payload.get("user", ""),
+            amount=float(payload.get("amount", "0")),
+            transfer_id=payload.get("transferId", ""),
+            created_at=created_at,
+            description=payload.get("description"),
         )
 
-        # Handle response format: array of contract entries
-        contracts = data if isinstance(data, list) else data.get("activeContracts", [])
-
-        for contract in contracts:
-            # Canton 3.4 format: contractEntry.JsActiveContract.createdEvent
-            entry = contract.get("contractEntry", {})
-            active_contract = entry.get("JsActiveContract") or entry.get("activeContract", {})
-            created_event = active_contract.get("createdEvent", {})
-
-            payload = created_event.get("createArgument") or created_event.get("createArguments", {})
-            contract_id = created_event.get("contractId", "")
-            template_id_check = created_event.get("templateId", "")
-
-            # Skip non-CreditReceipt contracts
-            if not template_id_check.endswith(":CreditReceipt"):
-                continue
-
-            # Check if transferId matches
-            if payload.get("transferId") == transfer_id:
-                logger.info(f"Found existing CreditReceipt for transferId {transfer_id}: {contract_id}")
-                return CreditRecord(
-                    contract_id=contract_id,
-                    user_party=payload.get("user", ""),
-                    amount=float(payload.get("amount", "0")),
-                    transfer_id=payload.get("transferId", ""),
-                    created_at=created_event.get("createdAt", ""),
-                    description=payload.get("description"),
-                )
-
+    try:
+        results = await _query_active_contracts_via_updates(
+            template_suffix=":MCP.Billing:CreditReceipt",
+            party=CANTON_PROVIDER_PARTY,
+            extract=extract,
+            stop_when=lambda _r: True,
+        )
+        if results:
+            record = results[0]
+            logger.info(
+                f"Found existing CreditReceipt for transferId {transfer_id}: {record.contract_id}"
+            )
+            return record
         logger.info(f"No existing credit found for transferId: {transfer_id}")
         return None
-
     except LedgerError:
         raise
     except Exception as e:
