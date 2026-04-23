@@ -24,6 +24,17 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+// Dormant after this many consecutive task errors (thrown or agent-reported)
+// with no successful task between. Prevents an orphaned bot from spinning
+// against a dead token / stale key / misconfigured server forever.
+//
+// Only *task* errors count — top-up failures log but don't retire a bot,
+// because a billing-portal outage simultaneously hitting all 20 bots would
+// otherwise cause mass dormancy. If top-ups fail long enough that the bot
+// runs out of credit, subsequent task failures (billing denials) will
+// correctly increment this counter.
+const MAX_CONSECUTIVE_TASK_ERRORS = 5;
+
 export class VirtualBot {
   #agent;
   #keyPath;
@@ -41,8 +52,10 @@ export class VirtualBot {
   #taskIndex = 0;
   #tasksRun = 0;
   #topUpsDone = 0;
+  #consecutiveTaskErrors = 0;
   #nextTaskAt = 0;
   #nextTopUpAt = 0;
+  #loopPromise = null;
 
   constructor({
     keyPath,
@@ -107,7 +120,13 @@ export class VirtualBot {
       const result = await this.#agent.executeTask(task);
       this.#stats.addTaskResults([result], { persona: this.#persona.name });
       this.#tasksRun++;
+      if (result.error) {
+        this.#consecutiveTaskErrors++;
+      } else {
+        this.#consecutiveTaskErrors = 0;
+      }
     } catch (err) {
+      this.#consecutiveTaskErrors++;
       console.log(
         `[EVENT] ${iso()} bot_task_crash partyId=${this.partyId?.slice(0, 40) || "unknown"} persona=${this.#persona.name} error=${JSON.stringify(err.message)}`
       );
@@ -130,6 +149,7 @@ export class VirtualBot {
         amountCC: this.#persona.topUpAmountCC,
       });
     } catch (err) {
+      // Intentionally does NOT bump the task-error counter; see constant comment.
       console.log(
         `[WARN] ${iso()} bot_topup_failed partyId=${this.partyId?.slice(0, 40) || "unknown"} persona=${this.#persona.name} error=${JSON.stringify(err.message)}`
       );
@@ -160,10 +180,10 @@ export class VirtualBot {
   }
 
   startLoop() {
-    if (this.#running) return;
+    if (this.#running) return this.#loopPromise;
     this.#running = true;
 
-    (async () => {
+    this.#loopPromise = (async () => {
       const now = Date.now();
       this.#scheduleNextTask(now);
       this.#scheduleNextTopUp(now);
@@ -185,13 +205,28 @@ export class VirtualBot {
             this.#goDormant("lifetime_cap");
             break;
           }
+          if (this.#consecutiveTaskErrors >= MAX_CONSECUTIVE_TASK_ERRORS) {
+            this.#goDormant("task_error_threshold");
+            break;
+          }
           this.#scheduleNextTask(Date.now());
         } else if (fired >= this.#nextTopUpAt) {
           await this.#runTopUp();
+          if (this.#consecutiveTaskErrors >= MAX_CONSECUTIVE_TASK_ERRORS) {
+            this.#goDormant("task_error_threshold");
+            break;
+          }
           this.#scheduleNextTopUp(Date.now());
         }
       }
       this.#running = false;
     })();
+
+    return this.#loopPromise;
+  }
+
+  /** Promise resolving when the loop has exited. Used by orchestrator.stop(). */
+  get loopPromise() {
+    return this.#loopPromise;
   }
 }

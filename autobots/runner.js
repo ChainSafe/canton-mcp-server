@@ -304,6 +304,21 @@ function buildPersonas(weightsSpec) {
 }
 
 async function runGrowthMode(opts, tasks) {
+  // Sanity-check demo-time-scale: must be positive & finite. Warn if it's
+  // absurdly high — a misconfigured value like 100000 would collapse all
+  // per-bot intervals toward the 100ms floor.
+  if (!Number.isFinite(opts.demoTimeScale) || opts.demoTimeScale <= 0) {
+    logCritical(
+      `Invalid --demo-time-scale ${opts.demoTimeScale}; must be a positive number. Aborting.`
+    );
+    process.exit(1);
+  }
+  if (opts.demoTimeScale > 1000) {
+    logWarn(
+      `--demo-time-scale=${opts.demoTimeScale} is very high; per-bot intervals may collapse to the 100ms floor. Continuing anyway.`
+    );
+  }
+
   const personas = buildPersonas(opts.personaWeights);
   const personaSummary = Object.values(personas)
     .map((p) => `${p.name}=${p.weight}`)
@@ -343,16 +358,26 @@ async function runGrowthMode(opts, tasks) {
     poolSize: opts.poolSize,
   });
 
-  const shutdown = () => {
-    logInfo("Shutdown requested — stopping orchestrator and printing final status...");
-    orchestrator.stop();
-    if (statusTimer) clearInterval(statusTimer);
+  let shuttingDown = false;
+  const shutdown = async (signal) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logInfo(`Shutdown requested (${signal}) — stopping orchestrator and printing final status...`);
+    if (statusTimer) {
+      clearInterval(statusTimer);
+      statusTimer = null;
+    }
+    try {
+      await orchestrator.stop();
+    } catch (err) {
+      logCritical(`Error during orchestrator.stop: ${err.message}`);
+    }
     console.log(stats.formatStatus());
     logInfo(`Final: ${JSON.stringify(stats.snapshot().cumulative)} bots=${stats.botCount}`);
     process.exit(0);
   };
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", () => void shutdown("SIGINT"));
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
   process.on("uncaughtException", (err) => {
     logCritical(`Uncaught exception: ${err.message}`);
@@ -364,7 +389,16 @@ async function runGrowthMode(opts, tasks) {
     if (reason?.stack) console.error(reason.stack);
   });
 
-  await orchestrator.start();
+  try {
+    await orchestrator.start();
+  } finally {
+    // Belt-and-braces: if start() ever returns (or throws) before shutdown
+    // fires, still release the status timer so node can exit cleanly.
+    if (statusTimer) {
+      clearInterval(statusTimer);
+      statusTimer = null;
+    }
+  }
 }
 
 async function main() {
