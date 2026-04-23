@@ -27,10 +27,23 @@ export class StatsAggregator {
   };
   #consecutiveEmptyIterations = 0; // for outage detection
   #consecutiveAllErrorIterations = 0;
+  #spawnedBots = new Set();
+  #dormantBots = new Set();
+  // Persona breakdown: { [personaName]: { tasks, topUps, topUpCC, spawned, dormant } }
+  #byPersona = {};
+
+  #persona(name) {
+    if (!name) name = "unknown";
+    if (!this.#byPersona[name]) {
+      this.#byPersona[name] = { tasks: 0, topUps: 0, topUpCC: 0, spawned: 0, dormant: 0 };
+    }
+    return this.#byPersona[name];
+  }
 
   /** Feed individual task results as they complete (real-time). */
-  addTaskResults(results) {
+  addTaskResults(results, meta = {}) {
     const now = Date.now();
+    const personaName = meta.persona;
     for (const r of results) {
       this.#buffer.push({
         ts: now,
@@ -39,6 +52,7 @@ export class StatsAggregator {
         pass: r.pass,
         error: !!r.error,
         action: r.action,
+        persona: personaName,
       });
       this.#cumulative.tasks++;
       this.#cumulative.ccSpent += r.ccSpent;
@@ -46,8 +60,50 @@ export class StatsAggregator {
       if (r.error) this.#cumulative.errors++;
       else if (r.pass) this.#cumulative.passed++;
       else this.#cumulative.failed++;
+      if (personaName) this.#persona(personaName).tasks++;
     }
     this.#prune();
+  }
+
+  /** Record a top-up event (persona-tagged). */
+  addTopUp({ partyId, persona, amountCC } = {}) {
+    const row = this.#persona(persona);
+    row.topUps++;
+    row.topUpCC += Number(amountCC) || 0;
+  }
+
+  /** Mark a bot as dormant (lifetime cap reached or similar). */
+  markDormant({ partyId, persona } = {}) {
+    if (partyId) this.#dormantBots.add(partyId);
+    const row = this.#persona(persona);
+    row.dormant++;
+  }
+
+  /** Record that a new bot identity has joined the fleet (growth mode). */
+  addBotSpawned(partyId, personaName) {
+    if (partyId) this.#spawnedBots.add(partyId);
+    if (personaName) this.#persona(personaName).spawned++;
+  }
+
+  get botCount() {
+    return this.#spawnedBots.size;
+  }
+
+  get dormantCount() {
+    return this.#dormantBots.size;
+  }
+
+  get activeCount() {
+    return Math.max(0, this.#spawnedBots.size - this.#dormantBots.size);
+  }
+
+  get personaBreakdown() {
+    // Return a stable shallow copy so callers can log without mutating internals.
+    const out = {};
+    for (const [name, row] of Object.entries(this.#byPersona)) {
+      out[name] = { ...row, topUpCC: +row.topUpCC.toFixed(2) };
+    }
+    return out;
   }
 
   /** Mark end of an iteration for outage detection. */
@@ -138,12 +194,30 @@ export class StatsAggregator {
     const m = s.minute;
     const h = s.hour;
     const c = s.cumulative;
+    let botsSegment = "";
+    if (this.#spawnedBots.size > 0) {
+      botsSegment = ` bots=${this.#spawnedBots.size}(active=${this.activeCount},dormant=${this.dormantCount}) |`;
+    }
+    const personaSegment = this.#personaSegment();
     return (
-      `[STATUS] ${now} uptime=${s.uptime} | ` +
+      `[STATUS] ${now} uptime=${s.uptime} |${botsSegment} ` +
       `last_min: tasks=${m.tasks} passed=${m.passed} errors=${m.errors} | ` +
       `hour: tasks=${h.tasks} pass_rate=${(h.passRate * 100).toFixed(1)}% cc=${h.ccSpent.toFixed(2)} avg=${h.avgDurationMs}ms p95=${h.p95DurationMs}ms | ` +
-      `total: tasks=${c.tasks} pass_rate=${(c.passRate * 100).toFixed(1)}% cc=${c.ccSpent.toFixed(2)} iter=${c.iterations}`
+      `total: tasks=${c.tasks} pass_rate=${(c.passRate * 100).toFixed(1)}% cc=${c.ccSpent.toFixed(2)} iter=${c.iterations}` +
+      personaSegment
     );
+  }
+
+  #personaSegment() {
+    const entries = Object.entries(this.#byPersona);
+    if (entries.length === 0) return "";
+    const parts = entries
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(
+        ([name, r]) =>
+          `${name}(spawn=${r.spawned},tasks=${r.tasks},topups=${r.topUps},topupCC=${r.topUpCC.toFixed(2)},dormant=${r.dormant})`
+      );
+    return ` | personas: ${parts.join(" ")}`;
   }
 
   get consecutiveAllErrorIterations() {

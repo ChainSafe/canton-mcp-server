@@ -19,6 +19,8 @@
 import { readFileSync } from "fs";
 import { resolve } from "path";
 import { Agent } from "./agent.js";
+import { GrowthOrchestrator } from "./orchestrator.js";
+import { PERSONAS } from "./personas.js";
 import { StatsAggregator } from "./stats.js";
 
 const DEFAULT_SERVER = "https://mcp-dev1.01.chainsafe.dev";
@@ -38,6 +40,17 @@ function logCritical(msg) {
   console.log(`[CRITICAL] ${iso()} ${msg}`);
 }
 
+// parseInt/parseFloat with a default, honoring explicit 0. `parseInt("abc")`
+// returns NaN (→ default); `parseInt("0")` returns 0 (kept, not replaced).
+function parseIntOr(raw, fallback) {
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) ? n : fallback;
+}
+function parseFloatOr(raw, fallback) {
+  const n = parseFloat(raw);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 function parseArgs() {
   const args = process.argv.slice(2);
   const opts = {
@@ -51,6 +64,15 @@ function parseArgs() {
     tasks: null,
     billingPortal: null,
     verbose: false,
+    growth: false,
+    maxUsers: 50,
+    rampHours: 24,
+    keysDir: null,
+    growthTickSeconds: 30,
+    poolSize: 100,
+    billingApiKey: process.env.BILLING_API_KEY || null,
+    demoTimeScale: 1,
+    personaWeights: null, // e.g., "casual=0.7,regular=0.25,churned=0.05"
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -62,19 +84,19 @@ function parseArgs() {
         opts.server = args[++i];
         break;
       case "--parallel":
-        opts.parallel = parseInt(args[++i], 10) || 1;
+        opts.parallel = parseIntOr(args[++i], 1);
         break;
       case "--interval":
-        opts.interval = parseInt(args[++i], 10) || DEFAULT_INTERVAL;
+        opts.interval = parseIntOr(args[++i], DEFAULT_INTERVAL);
         break;
       case "--loop":
         opts.loop = true;
         break;
       case "--loop-interval":
-        opts.loopInterval = parseInt(args[++i], 10) || DEFAULT_LOOP_INTERVAL;
+        opts.loopInterval = parseIntOr(args[++i], DEFAULT_LOOP_INTERVAL);
         break;
       case "--status-interval":
-        opts.statusInterval = parseInt(args[++i], 10) ?? DEFAULT_STATUS_INTERVAL;
+        opts.statusInterval = parseIntOr(args[++i], DEFAULT_STATUS_INTERVAL);
         break;
       case "--tasks":
         opts.tasks = args[++i];
@@ -84,6 +106,33 @@ function parseArgs() {
         break;
       case "--verbose":
         opts.verbose = true;
+        break;
+      case "--growth":
+        opts.growth = true;
+        break;
+      case "--max-users":
+        opts.maxUsers = parseIntOr(args[++i], opts.maxUsers);
+        break;
+      case "--ramp-hours":
+        opts.rampHours = parseFloatOr(args[++i], opts.rampHours);
+        break;
+      case "--billing-api-key":
+        opts.billingApiKey = args[++i];
+        break;
+      case "--demo-time-scale":
+        opts.demoTimeScale = parseFloatOr(args[++i], 1);
+        break;
+      case "--personas":
+        opts.personaWeights = args[++i];
+        break;
+      case "--keys-dir":
+        opts.keysDir = args[++i];
+        break;
+      case "--growth-tick-seconds":
+        opts.growthTickSeconds = parseIntOr(args[++i], opts.growthTickSeconds);
+        break;
+      case "--pool-size":
+        opts.poolSize = parseIntOr(args[++i], opts.poolSize);
         break;
       case "--help":
         console.log(`
@@ -104,6 +153,34 @@ Options:
   --verbose               Print per-iteration summary tables (in loop mode)
   --help                  Show this help
 
+Growth mode (simulate organic user growth with persona-driven bot identities):
+  --growth                Enable growth mode (ignores --key; provisions identities on-the-fly)
+  --billing-portal <url>  REQUIRED in growth mode — used to register new parties
+  --billing-api-key <key> Billing API key for in-band top-ups (or set BILLING_API_KEY env).
+                          Omit to disable auto top-ups (bots will still run tasks).
+  --max-users <n>         Target concurrent bot identities (default: 50)
+  --ramp-hours <h>        Signup ramp duration in hours (default: 24)
+  --demo-time-scale <n>   Compress simulated time: 1=real time (default),
+                          168=1 real hour ≈ 1 simulated week (for short demos).
+  --personas <spec>       Comma-separated persona weight overrides,
+                          e.g. "casual=0.7,regular=0.25,churned=0.05".
+                          Unspecified personas keep their default weight.
+  --keys-dir <path>       Dir for generated keyfiles (default: ./keys)
+  --growth-tick-seconds   Orchestrator tick interval (default: 30)
+  --pool-size <n>         Max number of distinct Canton parties to provision
+                          (default: 100). Existing keyfiles are adopted into
+                          the pool; bots release their party on dormancy so
+                          new bots can recycle it instead of provisioning
+                          a fresh one. Keeps the validator under its
+                          200-party cap.
+  Party hints are realistic usernames (alex42, maya_kim, coolfox7, …) generated
+  at provisioning time — not sequential "autobot-N" IDs.
+
+Personas (see personas.js for defaults):
+  casual   ~60%  light users (task every ~2 weeks, top-up every ~6 weeks)
+  regular  ~30%  active users (task every ~2 days, top-up every ~2-3 weeks)
+  churned  ~10%  sign up and vanish (1-2 tasks then dormant, no top-ups)
+
 Log levels:
   [EVENT]     per-task events (task_start, task_end, task_error, auth_*)
   [STATUS]    periodic rollup (cumulative + hour + minute stats)
@@ -114,8 +191,16 @@ Log levels:
     }
   }
 
-  if (!opts.key) {
-    console.error("Error: --key is required. Use --help for usage.");
+  if (opts.growth) {
+    if (!opts.billingPortal) {
+      console.error("Error: --growth requires --billing-portal. Use --help for usage.");
+      process.exit(1);
+    }
+    if (!opts.keysDir) {
+      opts.keysDir = resolve(import.meta.dirname, "keys");
+    }
+  } else if (!opts.key) {
+    console.error("Error: --key is required (or use --growth). Use --help for usage.");
     process.exit(1);
   }
 
@@ -195,9 +280,100 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+function buildPersonas(weightsSpec) {
+  // Start with a deep-enough copy so we don't mutate PERSONAS.
+  const personas = {};
+  for (const [name, p] of Object.entries(PERSONAS)) {
+    personas[name] = { ...p };
+  }
+  if (!weightsSpec) return personas;
+  for (const pair of weightsSpec.split(",")) {
+    const [rawName, rawWeight] = pair.split("=").map((s) => s.trim());
+    if (!rawName || !personas[rawName]) {
+      logWarn(`Ignoring unknown persona in --personas: ${rawName}`);
+      continue;
+    }
+    const w = parseFloat(rawWeight);
+    if (!Number.isFinite(w) || w < 0) {
+      logWarn(`Ignoring invalid weight for ${rawName}: ${rawWeight}`);
+      continue;
+    }
+    personas[rawName].weight = w;
+  }
+  return personas;
+}
+
+async function runGrowthMode(opts, tasks) {
+  const personas = buildPersonas(opts.personaWeights);
+  const personaSummary = Object.values(personas)
+    .map((p) => `${p.name}=${p.weight}`)
+    .join(",");
+  logInfo(
+    `Autobots starting in GROWTH mode — server=${opts.server} tasks=${tasks.length} maxUsers=${opts.maxUsers} rampHours=${opts.rampHours} personas=[${personaSummary}] demoTimeScale=${opts.demoTimeScale} billingPortal=${opts.billingPortal} billingApiKey=${opts.billingApiKey ? "set" : "none"}`
+  );
+
+  if (!opts.billingApiKey) {
+    logWarn(
+      "No --billing-api-key (and BILLING_API_KEY env not set). Auto top-ups disabled — bots will run tasks but never credit themselves."
+    );
+  }
+
+  const stats = new StatsAggregator();
+
+  // Periodic status logger
+  let statusTimer = null;
+  if (opts.statusInterval > 0) {
+    statusTimer = setInterval(() => {
+      console.log(stats.formatStatus());
+    }, opts.statusInterval * 1000);
+  }
+
+  const orchestrator = new GrowthOrchestrator({
+    serverUrl: opts.server,
+    billingPortalUrl: opts.billingPortal,
+    billingApiKey: opts.billingApiKey,
+    keysDir: opts.keysDir,
+    maxUsers: opts.maxUsers,
+    rampHours: opts.rampHours,
+    tickSeconds: opts.growthTickSeconds,
+    tasks,
+    stats,
+    personas,
+    demoTimeScale: opts.demoTimeScale,
+    poolSize: opts.poolSize,
+  });
+
+  const shutdown = () => {
+    logInfo("Shutdown requested — stopping orchestrator and printing final status...");
+    orchestrator.stop();
+    if (statusTimer) clearInterval(statusTimer);
+    console.log(stats.formatStatus());
+    logInfo(`Final: ${JSON.stringify(stats.snapshot().cumulative)} bots=${stats.botCount}`);
+    process.exit(0);
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+
+  process.on("uncaughtException", (err) => {
+    logCritical(`Uncaught exception: ${err.message}`);
+    console.error(err.stack);
+    process.exit(1);
+  });
+  process.on("unhandledRejection", (reason) => {
+    logCritical(`Unhandled rejection: ${reason}`);
+    if (reason?.stack) console.error(reason.stack);
+  });
+
+  await orchestrator.start();
+}
+
 async function main() {
   const opts = parseArgs();
   const tasks = loadTasks(opts.tasks);
+
+  if (opts.growth) {
+    return runGrowthMode(opts, tasks);
+  }
 
   logInfo(`Autobots starting — server=${opts.server} tasks=${tasks.length} parallel=${opts.parallel} loop=${opts.loop}`);
 
