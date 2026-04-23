@@ -40,6 +40,17 @@ function logCritical(msg) {
   console.log(`[CRITICAL] ${iso()} ${msg}`);
 }
 
+// parseInt/parseFloat with a default, honoring explicit 0. `parseInt("abc")`
+// returns NaN (→ default); `parseInt("0")` returns 0 (kept, not replaced).
+function parseIntOr(raw, fallback) {
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) ? n : fallback;
+}
+function parseFloatOr(raw, fallback) {
+  const n = parseFloat(raw);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 function parseArgs() {
   const args = process.argv.slice(2);
   const opts = {
@@ -73,19 +84,19 @@ function parseArgs() {
         opts.server = args[++i];
         break;
       case "--parallel":
-        opts.parallel = parseInt(args[++i], 10) || 1;
+        opts.parallel = parseIntOr(args[++i], 1);
         break;
       case "--interval":
-        opts.interval = parseInt(args[++i], 10) || DEFAULT_INTERVAL;
+        opts.interval = parseIntOr(args[++i], DEFAULT_INTERVAL);
         break;
       case "--loop":
         opts.loop = true;
         break;
       case "--loop-interval":
-        opts.loopInterval = parseInt(args[++i], 10) || DEFAULT_LOOP_INTERVAL;
+        opts.loopInterval = parseIntOr(args[++i], DEFAULT_LOOP_INTERVAL);
         break;
       case "--status-interval":
-        opts.statusInterval = parseInt(args[++i], 10) ?? DEFAULT_STATUS_INTERVAL;
+        opts.statusInterval = parseIntOr(args[++i], DEFAULT_STATUS_INTERVAL);
         break;
       case "--tasks":
         opts.tasks = args[++i];
@@ -100,16 +111,16 @@ function parseArgs() {
         opts.growth = true;
         break;
       case "--max-users":
-        opts.maxUsers = parseInt(args[++i], 10) || opts.maxUsers;
+        opts.maxUsers = parseIntOr(args[++i], opts.maxUsers);
         break;
       case "--ramp-hours":
-        opts.rampHours = parseFloat(args[++i]) || opts.rampHours;
+        opts.rampHours = parseFloatOr(args[++i], opts.rampHours);
         break;
       case "--billing-api-key":
         opts.billingApiKey = args[++i];
         break;
       case "--demo-time-scale":
-        opts.demoTimeScale = parseFloat(args[++i]) || 1;
+        opts.demoTimeScale = parseFloatOr(args[++i], 1);
         break;
       case "--personas":
         opts.personaWeights = args[++i];
@@ -118,10 +129,10 @@ function parseArgs() {
         opts.keysDir = args[++i];
         break;
       case "--growth-tick-seconds":
-        opts.growthTickSeconds = parseInt(args[++i], 10) || opts.growthTickSeconds;
+        opts.growthTickSeconds = parseIntOr(args[++i], opts.growthTickSeconds);
         break;
       case "--pool-size":
-        opts.poolSize = parseInt(args[++i], 10) || opts.poolSize;
+        opts.poolSize = parseIntOr(args[++i], opts.poolSize);
         break;
       case "--help":
         console.log(`

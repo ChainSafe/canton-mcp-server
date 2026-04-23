@@ -25,6 +25,24 @@ import { generateUniqueHint } from "./names.js";
 
 const iso = () => new Date().toISOString();
 
+// fetch wrapper with an AbortController-backed timeout. Autobots run for
+// hours or days; a hung TCP connection to the billing portal or MCP server
+// must not stall the orchestrator or a bot loop indefinitely.
+async function fetchWithTimeout(url, init = {}, timeoutMs = 30_000) {
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: ac.signal });
+  } catch (err) {
+    if (err.name === "AbortError") {
+      throw new Error(`timeout after ${timeoutMs}ms (${url})`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 // PKCS#8 DER prefix for an Ed25519 private key; the 32-byte raw seed follows.
 const PKCS8_ED25519_PREFIX = Buffer.from(
   "302e020100300506032b657004220420",
@@ -125,11 +143,15 @@ export async function provisionNewParty({ billingPortalUrl, keysDir }) {
   // Step 1: ask the validator to generate topology transactions.
   let genRes;
   try {
-    genRes = await fetch(`${base}/api/register-party/generate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ partyId, publicKey: publicKeyB64 }),
-    });
+    genRes = await fetchWithTimeout(
+      `${base}/api/register-party/generate`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ partyId, publicKey: publicKeyB64 }),
+      },
+      30_000,
+    );
   } catch (err) {
     throw new Error(`PROVISION_FAILED (generate network): ${err.message}`);
   }
@@ -168,17 +190,22 @@ export async function provisionNewParty({ billingPortalUrl, keysDir }) {
   // Step 3: submit. The billing portal polls the synchronizer before returning.
   let submitRes;
   try {
-    submitRes = await fetch(`${base}/api/register-party/submit`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        signedTopologyTxs,
-        publicKey: publicKeyB64,
-        keyFingerprint: genData.keyFingerprint,
-        originalHash: topologyTxs[0].hash,
-        partyId,
-      }),
-    });
+    // submit polls the synchronizer (up to ~180s); needs a longer timeout.
+    submitRes = await fetchWithTimeout(
+      `${base}/api/register-party/submit`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          signedTopologyTxs,
+          publicKey: publicKeyB64,
+          keyFingerprint: genData.keyFingerprint,
+          originalHash: topologyTxs[0].hash,
+          partyId,
+        }),
+      },
+      240_000,
+    );
   } catch (err) {
     throw new Error(`PROVISION_FAILED (submit network): ${err.message}`);
   }
@@ -225,19 +252,23 @@ export async function topUpParty({
 
   let res;
   try {
-    res = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Billing-API-Key": billingApiKey,
+    res = await fetchWithTimeout(
+      url,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Billing-API-Key": billingApiKey,
+        },
+        body: JSON.stringify({
+          userParty: partyId,
+          amount: amountCC,
+          transferId,
+          description: `autobot ${personaName || "top-up"}`,
+        }),
       },
-      body: JSON.stringify({
-        userParty: partyId,
-        amount: amountCC,
-        transferId,
-        description: `autobot ${personaName || "top-up"}`,
-      }),
-    });
+      30_000,
+    );
   } catch (err) {
     throw new Error(`TOPUP_FAILED (network): ${err.message}`);
   }

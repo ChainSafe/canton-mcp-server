@@ -730,7 +730,7 @@ async def _query_active_contracts_via_updates(
     party: str,
     extract: Callable[[str, dict, str], Optional[_T]],
     stop_when: Optional[Callable[[_T], bool]] = None,
-    page_size: int = 100,
+    page_size: int = 1000,
     end_offset: Optional[int] = None,
 ) -> list[_T]:
     """
