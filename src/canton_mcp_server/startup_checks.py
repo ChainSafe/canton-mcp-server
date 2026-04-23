@@ -61,6 +61,12 @@ def validate_startup_config() -> dict:
         raise SystemExit(msg)
 
     # --- Step 2: ChromaDB path check ---
+    # Presence of a pre-built ChromaDB index is informational, not fatal.
+    # The CPU Dockerfile pre-indexes at build time, so production CPU images
+    # always have chroma.sqlite3 at boot. The GPU Dockerfile deliberately
+    # ships without an index — `server.py`'s warmup task creates the dir and
+    # indexes on the GPU at runtime (see `_warmup_semantic_search`). Either
+    # way, blocking boot here stops the warmup task from ever running.
     chroma_dir = get_env("CHROMA_PERSIST_DIR", "")
     if chroma_dir:
         chroma_path = Path(chroma_dir)
@@ -71,20 +77,16 @@ def validate_startup_config() -> dict:
                 logger.info(f"ChromaDB index found at {chroma_dir}")
             else:
                 readiness["chromadb_ready"] = False
-                msg = f"CHROMA_PERSIST_DIR={chroma_dir} exists but contains no chroma.sqlite3 — pre-built index missing"
-                if is_isolated:
-                    logger.critical(msg)
-                    raise SystemExit(msg)
-                else:
-                    logger.warning(f"{msg} (will build on first request)")
+                logger.warning(
+                    f"CHROMA_PERSIST_DIR={chroma_dir} exists but contains no chroma.sqlite3 — "
+                    f"warmup task will build the index on first request"
+                )
         else:
             readiness["chromadb_ready"] = False
-            msg = f"CHROMA_PERSIST_DIR={chroma_dir} does not exist"
-            if is_isolated:
-                logger.critical(msg)
-                raise SystemExit(msg)
-            else:
-                logger.warning(f"{msg} (will create on first request)")
+            logger.warning(
+                f"CHROMA_PERSIST_DIR={chroma_dir} does not exist — "
+                f"warmup task will create and populate it on first request"
+            )
 
     # --- Step 3: LLM model ping ---
     llm_enabled = get_env_bool("ENABLE_LLM_ENRICHMENT", False) or get_env_bool("ENABLE_LLM_AUTH_EXTRACTION", False)
