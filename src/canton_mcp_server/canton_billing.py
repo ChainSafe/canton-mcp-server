@@ -863,47 +863,27 @@ async def get_or_create_charge_manager() -> str:
 
     logger.info("Looking for existing ChargeManager contract...")
 
-    # Query for existing ChargeManager
-    template_id = f"{BILLING_PACKAGE_ID}:MCP.Billing:ChargeManager"
-
     try:
-        # Get current ledger offset
-        offset = await get_ledger_offset()
+        # Query for existing ChargeManager via the paginated /v2/updates helper.
+        # ChargeManager was intended to be a singleton, but historical deploys
+        # with cold in-memory caches created multiple copies over time — on
+        # mainnet the provider party now has >200 of them, which crossed the
+        # /v2/state/active-contracts 200-element hard cap and surfaced as
+        # "413 JSON_API_MAXIMUM_LIST_ELEMENTS_NUMBER_REACHED" inside
+        # /billing/credit top-up failures. The paginated helper scans via
+        # /v2/updates (no cap) and short-circuits on the first active match.
+        def _extract_charge_manager(contract_id: str, _payload: dict, _created_at: str) -> Optional[str]:
+            return contract_id or None
 
-        data = await _make_ledger_request(
-            "POST",
-            "/v2/state/active-contracts",
-            {
-                "filter": {
-                    "filtersByParty": {
-                        CANTON_PROVIDER_PARTY: {
-                            "filters": [{
-                                "templateFilter": {
-                                    "templateId": template_id
-                                }
-                            }]
-                        }
-                    }
-                },
-                "activeAtOffset": offset
-            }
+        found = await _query_active_contracts_via_updates(
+            template_suffix=":MCP.Billing:ChargeManager",
+            party=CANTON_PROVIDER_PARTY,
+            extract=_extract_charge_manager,
+            stop_when=lambda _cid: True,  # return as soon as any active one is seen
         )
 
-        # Handle different response formats (list or dict with activeContracts)
-        contracts = data if isinstance(data, list) else data.get("activeContracts", [])
-
-        if contracts:
-            # Handle different response formats
-            first = contracts[0]
-            contract_id = (
-                first.get("contractId") or
-                first.get("createdEvent", {}).get("contractId") or
-                first.get("contractEntry", {}).get("activeContract", {}).get("createdEvent", {}).get("contractId") or
-                first.get("contractEntry", {}).get("JsActiveContract", {}).get("createdEvent", {}).get("contractId")
-            )
-            if not contract_id:
-                logger.error(f"Cannot find contractId in response: {first}")
-                raise LedgerError("No contractId found in ChargeManager query response")
+        if found:
+            contract_id = found[0]
             logger.info(f"Found existing ChargeManager: {contract_id}")
             _charge_manager_cache = {
                 "contract_id": contract_id,
@@ -913,6 +893,7 @@ async def get_or_create_charge_manager() -> str:
 
         # No ChargeManager exists, create one using submit-and-wait-for-transaction
         logger.info("Creating new ChargeManager contract...")
+        template_id = f"{BILLING_PACKAGE_ID}:MCP.Billing:ChargeManager"
 
         create_data = await _make_ledger_request(
             "POST",
