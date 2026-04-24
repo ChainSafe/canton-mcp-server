@@ -893,6 +893,7 @@ async def get_or_create_charge_manager() -> str:
 
         # No ChargeManager exists, create one using submit-and-wait-for-transaction
         logger.info("Creating new ChargeManager contract...")
+        template_id = f"{BILLING_PACKAGE_ID}:MCP.Billing:ChargeManager"
 
         create_data = await _make_ledger_request(
             "POST",
