@@ -1413,18 +1413,17 @@ async def create_billing_credit(request: Request):
             description=description or "Top-up via billing portal",
         )
 
-        # Get updated balance
-        billing = await get_chain_balance(user_party)
-
         logger.info(f"💳 CreditReceipt created: {contract_id} for {user_party} - {amount} CC")
 
+        # Intentionally NOT calling get_chain_balance() here. On a busy provider
+        # party (thousands of charges + credits) it adds ~25–30 round-trips of
+        # paginated /v2/updates walks (~30s) — long enough to exceed the
+        # autobot's 30s fetch timeout. Callers that need the post-credit
+        # balance should hit GET /billing/balance/{party_id} explicitly.
         return JSONResponse(content={
             "success": True,
             "contractId": contract_id,
             "amount": amount,
-            "balance": billing.balance,
-            "totalCredited": billing.total_credited,
-            "totalCharged": billing.total_charged,
         })
 
     except CantonBillingError as e:
