@@ -1005,6 +1005,11 @@ async def create_charge_receipt(
 
     template_id = f"{BILLING_PACKAGE_ID}:MCP.Billing:ChargeReceipt"
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    # Defensive: don't trust request_id for ledger-level uniqueness. Some
+    # MCP clients reuse string IDs (e.g. tool name) across calls, which
+    # would collide on Canton's commandId dedup window (~1 day) and surface
+    # as BILLING INTEGRITY 409s. Append a per-attempt nanosecond suffix.
+    command_suffix = time.time_ns()
 
     logger.info(f"Creating ChargeReceipt: user={user_party} tool={tool} amount={amount}")
 
@@ -1016,7 +1021,7 @@ async def create_charge_receipt(
             {
                 "commands": {
                     "userId": CANTON_USER_ID,
-                    "commandId": f"charge-{request_id}",
+                    "commandId": f"charge-{request_id}-{command_suffix}",
                     "actAs": [CANTON_PROVIDER_PARTY],
                     "readAs": [CANTON_PROVIDER_PARTY],
                     "commands": [{
@@ -1073,7 +1078,7 @@ async def create_charge_receipt(
                         {
                             "commands": {
                                 "userId": CANTON_USER_ID,
-                                "commandId": f"charge-{request_id}-retry",
+                                "commandId": f"charge-{request_id}-retry-{time.time_ns()}",
                                 "actAs": [CANTON_PROVIDER_PARTY],
                                 "readAs": [CANTON_PROVIDER_PARTY],
                                 "commands": [{
